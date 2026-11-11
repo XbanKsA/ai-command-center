@@ -1,0 +1,16 @@
+# --- core server ---
+fastapi>=0.110
+uvicorn[standard]>=0.29
+httpx>=0.27
+websockets>=12.0
+psutil>=5.9
+nvidia-ml-py>=12.560        # NVIDIA GPU telemetry (import name: pynvml)
+
+# --- voice (wake word, speech-to-text, text-to-speech) ---
+numpy>=1.26
+sounddevice>=0.4.6
+miniaudio>=1.59
+openwakeword>=0.6.0
+faster-whisper>=1.0.3
+av>=11,<19                  # PyAV 19 breaks faster-whisper's audio decoding (tested)
+edge-tts>=6.1.10

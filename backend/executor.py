@@ -1,0 +1,412 @@
+"""
+Windows action executor -- no hardcoded app paths.
+
+App discovery is dynamic:
+  * `Get-StartApps` (PowerShell)  -> every app in the Start Menu, including Store/UWP apps,
+                                     launched through `shell:AppsFolder\\<AppID>`
+  * Start Menu + Desktop shortcuts (.lnk / .url / .appref-ms) -> launched with os.startfile
+
+Names are fuzzy-matched. If the best match isn't clearly ahead of the others, the
+executor reports the request as AMBIGUOUS and returns the candidates instead of guessing.
+"""
+from __future__ import annotations
+
+import json
+import logging
+import os
+import re
+import subprocess
+import sys
+import threading
+import time
+import urllib.parse
+import webbrowser
+from dataclasses import dataclass, field
+from difflib import SequenceMatcher
+from pathlib import Path
+
+import psutil
+
+log = logging.getLogger("executor")
+IS_WINDOWS = sys.platform == "win32"
+CREATE_NO_WINDOW = 0x08000000
+
+# ----------------------------------------------------------------- data types
+
+
+@dataclass
+class AppEntry:
+    name: str
+    kind: str          # "startapp" | "shortcut" | "builtin"
+    target: str        # AppID, shortcut path, or command
+    norm: str = ""
+
+    def __post_init__(self):
+        self.norm = normalize(self.name)
+
+    def to_dict(self) -> dict:
+        return {"name": self.name, "kind": self.kind, "target": self.target}
+
+
+@dataclass
+class ActionResult:
+    ok: bool
+    message: str
+    data: dict = field(default_factory=dict)
+
+
+@dataclass
+class MatchResult:
+    status: str                     # "match" | "ambiguous" | "none"
+    best: AppEntry | None = None
+    candidates: list[tuple[AppEntry, float]] = field(default_factory=list)
+
+
+# ----------------------------------------------------------------- matching
+
+_NOISE_WORDS = ("uninstall", "help", "readme", "read me", "manual", "documentation", "release notes",
+                "website", "support", "license", "changelog", "what's new", "debug", "safe mode")
+
+ALIASES = {
+    "chrome": "google chrome", "google": "google chrome",
+    "edge": "microsoft edge", "browser": "microsoft edge",
+    "vscode": "visual studio code", "vs code": "visual studio code", "code": "visual studio code",
+    "explorer": "file explorer", "files": "file explorer", "file manager": "file explorer",
+    "my files": "file explorer",
+    "cmd": "command prompt", "command line": "command prompt",
+    "calc": "calculator", "task manager": "task manager", "taskmgr": "task manager",
+    "word": "word", "excel": "excel", "powerpoint": "powerpoint", "outlook": "outlook",
+    "control panel": "control panel", "settings": "settings",
+    "كروم": "google chrome", "الحاسبة": "calculator", "حاسبة": "calculator", "المتصفح": "microsoft edge",
+    "الاعدادات": "settings", "الإعدادات": "settings", "المفكرة": "notepad", "ستيم": "steam",
+    "سبوتيفاي": "spotify", "ديسكورد": "discord", "يوتيوب": "youtube",
+}
+
+
+def normalize(text: str) -> str:
+    text = (text or "").lower().replace("&", " and ")
+    text = re.sub(r"[^\w\s+]", " ", text)     # \w keeps Arabic letters; keep + (Notepad++)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _score(query: str, name: str) -> float:
+    if not query or not name:
+        return 0.0
+    if query == name:
+        s = 1.0
+    elif len(query) >= 3 and (name.startswith(query + " ") or name.startswith(query)):
+        s = 0.9
+    elif set(query.split()) <= set(name.split()):
+        s = 0.85
+    elif len(query) >= 3 and query in name:
+        s = 0.75
+    else:
+        s = SequenceMatcher(None, query, name).ratio() * 0.8
+    if any(w in name for w in _NOISE_WORDS) and not any(w in query for w in _NOISE_WORDS):
+        s -= 0.4
+    return max(s, 0.0)
+
+
+def match_app(query: str, entries: list[AppEntry], min_score: float = 0.5,
+              accept_score: float = 0.85, margin: float = 0.08) -> MatchResult:
+    q = normalize(query)
+    if not q:
+        return MatchResult("none")
+    queries = {q}
+    if q in ALIASES:
+        queries.add(normalize(ALIASES[q]))
+    scored: dict[str, tuple[AppEntry, float]] = {}
+    for e in entries:
+        s = max(_score(qq, e.norm) for qq in queries)
+        if s >= min_score and (e.norm not in scored or s > scored[e.norm][1]):
+            scored[e.norm] = (e, s)
+    ranked = sorted(scored.values(), key=lambda t: (-t[1], len(t[0].name)))
+    if not ranked:
+        return MatchResult("none")
+    best, best_s = ranked[0]
+    second_s = ranked[1][1] if len(ranked) > 1 else 0.0
+    if best_s >= accept_score and (best_s == 1.0 or best_s - second_s >= margin):
+        return MatchResult("match", best, ranked[:5])
+    return MatchResult("ambiguous", None, ranked[:5])
+
+
+# ----------------------------------------------------------------- app index
+
+BUILTIN_APPS = [
+    AppEntry("Notepad", "builtin", "notepad.exe"),
+    AppEntry("Calculator", "builtin", "calc.exe"),
+    AppEntry("Command Prompt", "builtin", "cmd.exe"),
+    AppEntry("File Explorer", "builtin", "explorer.exe"),
+    AppEntry("Task Manager", "builtin", "taskmgr.exe"),
+    AppEntry("Control Panel", "builtin", "control.exe"),
+    AppEntry("Settings", "builtin", "ms-settings:"),
+]
+
+
+def _shortcut_dirs() -> list[Path]:
+    env = os.environ
+    dirs = [
+        Path(env.get("PROGRAMDATA", r"C:\ProgramData")) / "Microsoft/Windows/Start Menu/Programs",
+        Path(env.get("APPDATA", "")) / "Microsoft/Windows/Start Menu/Programs",
+        Path(env.get("USERPROFILE", "")) / "Desktop",
+        Path(env.get("PUBLIC", r"C:\Users\Public")) / "Desktop",
+    ]
+    onedrive = env.get("OneDrive")
+    if onedrive:
+        dirs.append(Path(onedrive) / "Desktop")
+    return [d for d in dirs if str(d) and d.exists()]
+
+
+def scan_shortcuts() -> list[AppEntry]:
+    out = []
+    for d in _shortcut_dirs():
+        for ext in ("*.lnk", "*.url", "*.appref-ms"):
+            for p in d.rglob(ext):
+                out.append(AppEntry(p.stem, "shortcut", str(p)))
+    return out
+
+
+def scan_start_apps() -> list[AppEntry]:
+    """All Start Menu apps (desktop + Store) via PowerShell Get-StartApps."""
+    cmd = ["powershell", "-NoProfile", "-NonInteractive", "-Command",
+           "[Console]::OutputEncoding=[Text.Encoding]::UTF8; Get-StartApps | ConvertTo-Json -Compress"]
+    res = subprocess.run(cmd, capture_output=True, timeout=30, creationflags=CREATE_NO_WINDOW)
+    raw = res.stdout.decode("utf-8", errors="replace").strip()
+    if not raw:
+        return []
+    data = json.loads(raw)
+    if isinstance(data, dict):
+        data = [data]
+    return [AppEntry(d["Name"], "startapp", d["AppID"]) for d in data if d.get("Name") and d.get("AppID")]
+
+
+class AppIndex:
+    def __init__(self):
+        self.entries: list[AppEntry] = list(BUILTIN_APPS)
+        self.last_refresh = 0.0
+        self.errors: list[str] = []
+        self._lock = threading.Lock()
+
+    def refresh(self) -> int:
+        if not IS_WINDOWS:
+            return len(self.entries)
+        entries: list[AppEntry] = []
+        errors = []
+        for scanner in (scan_start_apps, scan_shortcuts):
+            try:
+                entries.extend(scanner())
+            except Exception as exc:
+                errors.append(f"{scanner.__name__}: {exc}")
+                log.warning("App scan %s failed: %s", scanner.__name__, exc)
+        entries.extend(BUILTIN_APPS)
+        with self._lock:
+            self.entries = entries
+            self.errors = errors
+            self.last_refresh = time.time()
+        log.info("App index refreshed: %d entries", len(entries))
+        return len(entries)
+
+    def refresh_if_stale(self, max_age: float = 600) -> None:
+        if time.time() - self.last_refresh > max_age:
+            self.refresh()
+
+    def match(self, query: str) -> MatchResult:
+        with self._lock:
+            entries = list(self.entries)
+        return match_app(query, entries)
+
+    def search(self, query: str, limit: int = 20) -> list[dict]:
+        with self._lock:
+            entries = list(self.entries)
+        if not query:
+            seen, out = set(), []
+            for e in sorted(entries, key=lambda e: e.norm):
+                if e.norm not in seen:
+                    seen.add(e.norm)
+                    out.append(e.to_dict())
+            return out[:limit]
+        res = match_app(query, entries, min_score=0.3, accept_score=2.0)
+        return [dict(e.to_dict(), score=round(s, 2)) for e, s in res.candidates][:limit]
+
+
+# ----------------------------------------------------------------- executor
+
+PROTECTED_PROCESSES = {
+    "system", "idle", "registry", "smss", "csrss", "wininit", "winlogon", "services", "lsass",
+    "svchost", "dwm", "explorer", "fontdrvhost", "sihost", "ctfmon", "conhost", "runtimebroker",
+    "searchhost", "startmenuexperiencehost", "shellexperiencehost", "audiodg", "ollama",
+    "ollama app", "python", "pythonw", "py", "memcompression", "securityhealthservice", "msmpeng",
+}
+
+MEDIA_KEYS = {
+    "play_pause": 0xB3, "next": 0xB0, "previous": 0xB1, "stop": 0xB2,
+    "mute": 0xAD, "volume_down": 0xAE, "volume_up": 0xAF,
+}
+
+
+class Executor:
+    def __init__(self, dry_run: bool = False, app_index: AppIndex | None = None):
+        self.dry_run = dry_run
+        self.apps = app_index or AppIndex()
+
+    # ---- helpers
+    def _run(self, description: str, fn) -> ActionResult:
+        if self.dry_run:
+            log.info("[DRY RUN] %s", description)
+            return ActionResult(True, f"[dry run] {description}", {"dry_run": True})
+        if not IS_WINDOWS:
+            return ActionResult(False, "This action only works on Windows.")
+        try:
+            fn()
+            log.info("Executed: %s", description)
+            return ActionResult(True, description)
+        except Exception as exc:
+            log.exception("Action failed: %s", description)
+            return ActionResult(False, f"Failed to {description[0].lower()}{description[1:]}: {exc}")
+
+    # ---- apps
+    def launch_entry(self, entry: AppEntry) -> ActionResult:
+        def go():
+            if entry.kind == "startapp":
+                subprocess.Popen(["explorer.exe", f"shell:AppsFolder\\{entry.target}"])
+            elif entry.kind == "builtin" and entry.target.endswith(":"):
+                os.startfile(entry.target)
+            elif entry.kind == "builtin":
+                subprocess.Popen([entry.target])
+            else:
+                os.startfile(entry.target)
+        res = self._run(f"Opening {entry.name}", go)
+        res.data.update({"app": entry.to_dict()})
+        return res
+
+    def launch_target(self, target: str) -> ActionResult:
+        """Launch something explicitly chosen by the user (tablet launcher slot):
+        an .exe/.lnk/file path, a URL, a shell: / ms-settings: URI, or an app name."""
+        t = (target or "").strip().strip('"')
+        if not t:
+            return ActionResult(False, "Nothing to launch.")
+        if re.match(r"^https?://", t, re.I):
+            return self.open_url(t)
+        if re.match(r"^(shell:|ms-settings:|steam://|spotify:|discord://)", t, re.I):
+            return self._run(f"Opening {t}", lambda: os.startfile(t))
+        p = Path(os.path.expandvars(t))
+        if p.is_absolute() or "\\" in t or "/" in t:
+            if not p.exists():
+                return ActionResult(False, f"File not found: {p}")
+            return self._run(f"Opening {p.name}", lambda: os.startfile(str(p)))
+        m = self.apps.match(t)
+        if m.status == "match":
+            return self.launch_entry(m.best)
+        if m.status == "ambiguous":
+            return ActionResult(False, f"'{t}' matches several apps.",
+                                {"ambiguous": True, "options": [e.name for e, _ in m.candidates]})
+        return ActionResult(False, f"No app called '{t}' was found.")
+
+    # ---- processes
+    def find_processes(self, query: str) -> dict[str, list[int]]:
+        q = normalize(ALIASES.get(normalize(query), query))
+        tokens = [t for t in q.split() if len(t) >= 3]
+        joined = q.replace(" ", "")
+        me = os.getpid()
+        try:
+            parent = psutil.Process(me).ppid()
+        except Exception:
+            parent = -1
+        found: dict[str, list[int]] = {}
+        for p in psutil.process_iter(["pid", "name"]):
+            try:
+                name = (p.info["name"] or "")
+                base = name.lower().removesuffix(".exe")
+                if (not base or base in PROTECTED_PROCESSES or base.startswith("python")
+                        or p.info["pid"] in (me, parent, 0, 4)):
+                    continue
+                if base == joined or base in tokens or (len(joined) >= 4 and joined in base):
+                    found.setdefault(name, []).append(p.info["pid"])
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                continue
+        return found
+
+    def close_processes(self, pids: list[int], label: str) -> ActionResult:
+        def go():
+            procs = []
+            for pid in pids:
+                try:
+                    pr = psutil.Process(pid)
+                    pr.terminate()
+                    procs.append(pr)
+                except psutil.NoSuchProcess:
+                    pass
+            _, alive = psutil.wait_procs(procs, timeout=5)
+            for pr in alive:
+                try:
+                    pr.kill()
+                except psutil.NoSuchProcess:
+                    pass
+        return self._run(f"Closing {label}", go)
+
+    # ---- web
+    @staticmethod
+    def normalize_url(url: str) -> str | None:
+        u = (url or "").strip()
+        if not u or " " in u:
+            return None
+        if not re.match(r"^[a-z][a-z0-9+.-]*://", u, re.I):
+            u = "https://" + u
+        parsed = urllib.parse.urlparse(u)
+        if parsed.scheme not in ("http", "https") or not parsed.netloc or "." not in parsed.netloc:
+            return None
+        return u
+
+    def open_url(self, url: str) -> ActionResult:
+        u = self.normalize_url(url)
+        if not u:
+            return ActionResult(False, f"'{url}' doesn't look like a valid web address.")
+        res = self._run(f"Opening {u}", lambda: webbrowser.open(u))
+        res.data["url"] = u
+        return res
+
+    def web_search(self, query: str) -> ActionResult:
+        q = (query or "").strip()
+        if not q:
+            return ActionResult(False, "What should I search for?")
+        url = "https://www.google.com/search?q=" + urllib.parse.quote_plus(q)
+        res = self._run(f"Searching the web for {q}", lambda: webbrowser.open(url))
+        res.data["url"] = url
+        return res
+
+    # ---- media / system
+    def media(self, key: str) -> ActionResult:
+        vk = MEDIA_KEYS.get((key or "").strip().lower())
+        if vk is None:
+            return ActionResult(False, f"Unknown media command '{key}'.")
+
+        def go():
+            import ctypes
+            user32 = ctypes.windll.user32
+            presses = 5 if key in ("volume_up", "volume_down") else 1   # each press = 2%
+            for _ in range(presses):
+                user32.keybd_event(vk, 0, 0, 0)
+                user32.keybd_event(vk, 0, 2, 0)
+        return self._run(f"Media: {key.replace('_', ' ')}", go)
+
+    def lock_pc(self) -> ActionResult:
+        def go():
+            import ctypes
+            ctypes.windll.user32.LockWorkStation()
+        return self._run("Locking the PC", go)
+
+    def sleep_pc(self) -> ActionResult:
+        return self._run("Putting the PC to sleep", lambda: subprocess.Popen(
+            ["rundll32.exe", "powrprof.dll,SetSuspendState", "0,1,0"]))
+
+    def shutdown_pc(self) -> ActionResult:
+        return self._run("Shutting down the PC in 10 seconds", lambda: subprocess.Popen(
+            ["shutdown", "/s", "/t", "10"], creationflags=CREATE_NO_WINDOW))
+
+    def restart_pc(self) -> ActionResult:
+        return self._run("Restarting the PC in 10 seconds", lambda: subprocess.Popen(
+            ["shutdown", "/r", "/t", "10"], creationflags=CREATE_NO_WINDOW))
+
+    def cancel_shutdown(self) -> ActionResult:
+        return self._run("Cancelling the scheduled shutdown", lambda: subprocess.Popen(
+            ["shutdown", "/a"], creationflags=CREATE_NO_WINDOW))
