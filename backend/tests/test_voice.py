@@ -26,7 +26,7 @@ def test_stt_falls_back_to_cpu_when_gpu_inference_fails(monkeypatch):
 
     calls = {"n": 0}
 
-    def fake_run(audio):
+    def fake_run(audio, language=None):
         calls["n"] += 1
         if stt.device == "cuda":
             raise RuntimeError("cudnn_ops64_9.dll missing")
@@ -54,3 +54,41 @@ def test_voice_disabled_does_not_start():
     eng = VoiceEngine(s, asyncio.new_event_loop(), on_command=None)
     eng.start()
     assert "disabled" in eng.status["wake_word"] and eng._thread is None
+
+
+async def test_tts_cache_reuses_audio(monkeypatch):
+    tts = TTS("en-GB-RyanNeural", "ar-SA-HamedNeural")
+    calls = []
+
+    async def fake(text, voice):
+        calls.append((text, voice))
+        return b"mp3:" + text.encode()
+    monkeypatch.setattr(tts, "_synthesize", fake)
+    assert await tts.synthesize("Opening Chrome.") == b"mp3:Opening Chrome."
+    assert await tts.synthesize("Opening Chrome.") == b"mp3:Opening Chrome."
+    assert len(calls) == 1
+
+
+def test_end_of_speech_detection_with_vad():
+    """Feed the recorder: silence, 'speech', silence -> it must stop shortly after speech ends."""
+    import numpy as np
+    s = Settings()
+    s.end_silence_ms = 700
+    eng = VoiceEngine(s, asyncio.new_event_loop(), on_command=None)
+
+    pattern = [0] * 3 + [1] * 10 + [0] * 30          # 80 ms chunks
+    class FakeStream:
+        i = 0
+        def read(self, n):
+            v = pattern[min(self.i, len(pattern) - 1)]
+            self.i += 1
+            return (np.full((n, 1), 8000 if v else 0, dtype=np.int16), False)
+    eng._vad = None                                    # volume-based fallback path
+    st = FakeStream()
+    audio = eng._record_command(st, noise_floor=100)
+    assert audio is not None
+    assert st.i <= 3 + 10 + 9 + 1                      # stopped ~0.7 s after speech ended, not after 12 s
+    class Quiet(FakeStream):
+        def read(self, n):
+            return (np.zeros((n, 1), dtype=np.int16), False)
+    assert eng._record_command(Quiet(), noise_floor=100, max_wait=0.05) is None

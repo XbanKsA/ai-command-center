@@ -6,8 +6,8 @@ from telemetry import TelemetryCollector
 from tests.conftest import FakeLLM
 
 
-def intent(i, target="", reply="", conf=0.95):
-    return {"intent": i, "target": target, "reply": reply, "confidence": conf}
+def intent(i, target="", reply="", conf=0.95, browser=""):
+    return {"intent": i, "target": target, "browser": browser, "reply": reply, "confidence": conf}
 
 
 @pytest.fixture
@@ -117,15 +117,15 @@ async def test_safe_actions(make):
         "louder": intent("media_control", "volume_up", "Volume up."),
         "lock": intent("lock_pc", "", "Locking."),
     })
-    assert (await j.handle_text("open youtube"))["data"]["url"] == "https://youtube.com"
+    assert (await j.handle_text("open youtube"))["data"]["url"] == "https://www.youtube.com"
     assert (await j.handle_text("search weather riyadh"))["status"] == "done"
     assert (await j.handle_text("louder"))["status"] == "done"
     assert (await j.handle_text("lock it"))["status"] == "done"
 
 
 async def test_bad_url_and_bad_media(make):
-    j, _ = make({"site": intent("open_url", "javascript:alert(1)"), "media": intent("media_control", "explode")})
-    assert (await j.handle_text("open site"))["status"] == "failed"
+    j, _ = make({"weird": intent("open_url", "javascript:alert(1)"), "media": intent("media_control", "explode")})
+    assert (await j.handle_text("open the weird thing"))["status"] == "failed"
     assert (await j.handle_text("media thing"))["status"] == "needs_clarification"
 
 
@@ -150,8 +150,10 @@ async def test_garbage_llm_output(make):
 
 async def test_ollama_down(make):
     j, _ = make(fail="Ollama is not running (start the Ollama app).")
-    r = await j.handle_text("open chrome")
+    r = await j.handle_text("tell me a joke")
     assert r["status"] == "error" and "Ollama" in r["reply"]
+    # simple commands still work without the LLM
+    assert (await j.handle_text("open chrome"))["status"] == "done"
 
 
 async def test_history_is_bounded(make):
@@ -170,3 +172,116 @@ async def test_listener_receives_events(make):
     j.add_listener(listener)
     await j.handle_text("hello", source="voice")
     assert got and got[0]["source"] == "voice"
+
+
+# ---------------------------------------------------------------- fixes from first real-PC test
+
+async def test_sites_in_specific_browser_fast_path(make):
+    j, llm = make()
+    r = await j.handle_text("open instagram, whatsapp and youtube on google chrome")
+    assert llm.calls == []                                   # no LLM needed
+    assert r["status"] == "done" and r["data"]["browser"] == "google chrome"
+    assert r["data"]["urls"] == ["https://www.instagram.com", "https://web.whatsapp.com", "https://www.youtube.com"]
+    assert r["reply"] == "Opening Instagram, WhatsApp and YouTube in Chrome."
+
+
+async def test_sites_in_browser_arabic(make):
+    j, llm = make()
+    r = await j.handle_text("افتح يوتيوب وانستقرام وواتساب في كروم")
+    assert llm.calls == []
+    assert r["data"]["urls"] == ["https://www.youtube.com", "https://www.instagram.com", "https://web.whatsapp.com"]
+    assert r["reply"] == "جاري فتح YouTube، Instagram وWhatsApp في Chrome."
+
+
+async def test_llm_open_url_with_browser_field(make):
+    j, _ = make({"stuff": intent("open_url", "youtube, instagram", browser="chrome")})
+    r = await j.handle_text("could you bring up my stuff")
+    assert r["data"]["urls"] == ["https://www.youtube.com", "https://www.instagram.com"]
+    assert r["data"]["browser"] == "chrome" and "in Chrome" in r["reply"]
+
+
+async def test_llm_puts_browser_in_target(make):
+    j, _ = make({"stuff": intent("open_url", "youtube on chrome")})
+    r = await j.handle_text("bring up my stuff")
+    assert r["data"]["urls"] == ["https://www.youtube.com"] and r["data"]["browser"] == "chrome"
+
+
+async def test_mix_apps_and_sites(make):
+    j, _ = make()
+    r = await j.handle_text("open spotify and youtube")
+    assert r["data"]["app"]["name"] == "Spotify" and r["data"]["urls"] == ["https://www.youtube.com"]
+    assert r["reply"] == "Opening Spotify and YouTube."
+
+
+async def test_open_unknown_thing_goes_to_llm(make):
+    j, llm = make({"door": intent("unknown", reply="I can't open doors.")})
+    r = await j.handle_text("open the door")
+    assert len(llm.calls) == 1 and r["status"] == "needs_clarification"
+
+
+@pytest.mark.parametrize("answer", ["Yes.", "Yes, close it.", "Yeah, do it.", "yes please", "Sure!", "OK",
+                                    "نعم", "اي سكره", "أكيد", "go ahead"])
+async def test_close_confirmation_understands_yes(make, monkeypatch, answer):
+    j, llm = make({"close": intent("close_app", "spotify")})
+    monkeypatch.setattr(j.executor, "find_processes", lambda q: {"Spotify.exe": [111, 112]})
+    r = await j.handle_text("close spotify")
+    assert r["status"] == "needs_confirmation" and r["reply"] == "Are you sure you want to close Spotify?"
+    calls = len(llm.calls)
+    r2 = await j.handle_text(answer)
+    assert len(llm.calls) == calls, answer       # answered without the LLM
+    assert r2["status"] == "done", (answer, r2["reply"])
+    assert "Spotify" in r2["reply"] or "سبوتيفاي" in r2["reply"] or "Spotify" in r2["reply"]
+
+
+@pytest.mark.parametrize("answer", ["No.", "No, don't.", "cancel", "لا", "nope never mind"])
+async def test_close_confirmation_understands_no(make, monkeypatch, answer):
+    j, _ = make()
+    monkeypatch.setattr(j.executor, "find_processes", lambda q: {"Spotify.exe": [111]})
+    r = await j.handle_text("close spotify")
+    assert r["status"] == "needs_confirmation"
+    assert (await j.handle_text(answer))["status"] == "cancelled"
+
+
+async def test_confirmation_via_llm_when_wording_is_unusual(make, monkeypatch):
+    j, llm = make({"go on then": intent("confirm")})
+    monkeypatch.setattr(j.executor, "find_processes", lambda q: {"Spotify.exe": [111]})
+    await j.handle_text("close spotify")
+    r = await j.handle_text("go on then, finish it")
+    assert r["status"] == "done"
+    # the LLM was told what question is pending
+    assert any("You just asked the user" in m["content"] for m in llm.calls[-1] if m["role"] == "system")
+
+
+async def test_yes_without_pending(make):
+    j, _ = make({"yes": intent("confirm")})
+    assert (await j.handle_text("yes"))["status"] == "failed"
+
+
+async def test_fast_media_and_elapsed(make):
+    j, llm = make()
+    r = await j.handle_text("Turn the volume up")
+    assert r["status"] == "done" and r["intent"] == "media_control" and llm.calls == []
+    assert r["reply"] == "Volume up."
+    assert (await j.handle_text("ارفع الصوت"))["reply"] == "رفعت الصوت."
+    assert r["via"] == "rules" and r["elapsed_ms"] >= 0
+
+
+async def test_fast_path_can_be_disabled(make):
+    j, llm = make({"notepad": intent("open_app", "notepad")})
+    j.fast_commands = False
+    await j.handle_text("open notepad")
+    assert len(llm.calls) == 1
+
+
+async def test_speech_without_commas(make):
+    j, llm = make()
+    r = await j.handle_text("Open Instagram WhatsApp and YouTube in Chrome.")
+    assert llm.calls == [] and len(r["data"]["urls"]) == 3
+
+
+@pytest.mark.parametrize("text,expected", [
+    ("Yes.", True), ("yes close it", True), ("Yeah do it", True), ("No, don't.", False), ("yes don't", None),
+    ("open notepad", None), ("لا", False), ("نعم", True), ("", None)])
+def test_yes_or_no(text, expected):
+    from jarvis import yes_or_no
+    assert yes_or_no(text) is expected

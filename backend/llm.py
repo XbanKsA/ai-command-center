@@ -13,10 +13,12 @@ class LLMError(Exception):
 
 
 class OllamaClient:
-    def __init__(self, base_url: str, model: str, timeout: float = 60.0):
+    def __init__(self, base_url: str, model: str, timeout: float = 60.0, keep_alive: str = "-1"):
         self.base_url = base_url.rstrip("/")
         self.model = model
         self.timeout = timeout
+        ka = str(keep_alive).strip()
+        self.keep_alive = int(ka) if ka.lstrip("-").isdigit() else ka
 
     async def health(self) -> dict:
         """{'reachable': bool, 'model_installed': bool, 'models': [...], 'error': str|None}"""
@@ -37,7 +39,7 @@ class OllamaClient:
             "model": self.model,
             "messages": messages,
             "stream": False,
-            "keep_alive": "30m",
+            "keep_alive": self.keep_alive,
             "options": {"temperature": temperature},
         }
         if schema is not None:

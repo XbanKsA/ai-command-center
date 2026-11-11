@@ -229,6 +229,83 @@ class AppIndex:
         return [dict(e.to_dict(), score=round(s, 2)) for e, s in res.candidates][:limit]
 
 
+# ----------------------------------------------------------------- websites & browsers
+
+# Well-known sites: spoken name -> (display name, url). Anything else that looks like a domain also works.
+SITES: dict[str, tuple[str, str]] = {}
+for _names, _display, _url in [
+    (["youtube", "you tube", "يوتيوب", "اليوتيوب"], "YouTube", "https://www.youtube.com"),
+    (["instagram", "insta", "انستقرام", "انستغرام", "إنستغرام", "انستا"], "Instagram", "https://www.instagram.com"),
+    (["whatsapp", "whatsapp web", "whats app", "واتساب", "واتس اب", "الواتس"], "WhatsApp", "https://web.whatsapp.com"),
+    (["twitter", "x", "تويتر", "اكس"], "X", "https://x.com"),
+    (["facebook", "فيسبوك", "فيس بوك"], "Facebook", "https://www.facebook.com"),
+    (["tiktok", "tik tok", "تيك توك"], "TikTok", "https://www.tiktok.com"),
+    (["snapchat", "snap", "سناب", "سناب شات"], "Snapchat", "https://web.snapchat.com"),
+    (["netflix", "نتفلكس", "نتفليكس"], "Netflix", "https://www.netflix.com"),
+    (["gmail", "جيميل", "قوقل ميل"], "Gmail", "https://mail.google.com"),
+    (["google", "قوقل", "جوجل"], "Google", "https://www.google.com"),
+    (["chatgpt", "chat gpt", "شات جي بي تي"], "ChatGPT", "https://chatgpt.com"),
+    (["claude", "كلود"], "Claude", "https://claude.ai"),
+    (["github", "جيت هب"], "GitHub", "https://github.com"),
+    (["reddit", "ريديت"], "Reddit", "https://www.reddit.com"),
+    (["twitch", "تويتش"], "Twitch", "https://www.twitch.tv"),
+    (["linkedin", "لينكد ان"], "LinkedIn", "https://www.linkedin.com"),
+    (["amazon", "امازون"], "Amazon", "https://www.amazon.sa"),
+    (["google maps", "maps", "خرائط قوقل"], "Google Maps", "https://maps.google.com"),
+    (["google drive", "drive", "قوقل درايف"], "Google Drive", "https://drive.google.com"),
+    (["spotify web"], "Spotify", "https://open.spotify.com"),
+]:
+    for _n in _names:
+        SITES[_n] = (_display, _url)
+
+# Spoken browser name -> executable name (looked up dynamically in the Windows registry "App Paths")
+BROWSERS = {
+    "chrome": "chrome.exe", "google chrome": "chrome.exe", "كروم": "chrome.exe", "قوقل كروم": "chrome.exe",
+    "edge": "msedge.exe", "microsoft edge": "msedge.exe", "ايدج": "msedge.exe",
+    "firefox": "firefox.exe", "فايرفوكس": "firefox.exe",
+    "brave": "brave.exe", "opera": "opera.exe", "opera gx": "opera.exe",
+}
+
+
+def resolve_site(name: str) -> tuple[str, str] | None:
+    """'youtube' -> ('YouTube', 'https://www.youtube.com'); 'example.com' -> ('example.com', 'https://example.com')."""
+    n = normalize(name)
+    for prefix in ("the ", "موقع ", "website ", "site "):
+        if n.startswith(prefix):
+            n = n[len(prefix):]
+    for suffix in (" website", " site", " web", " dot com"):
+        if n.endswith(suffix) and n[: -len(suffix)] in SITES:
+            n = n[: -len(suffix)]
+    if n in SITES:
+        return SITES[n]
+    url = Executor.normalize_url((name or "").strip())
+    if url and re.search(r"\.[a-z]{2,}(/|$)", url.split("://", 1)[1], re.I):
+        return (urllib.parse.urlparse(url).netloc, url)
+    return None
+
+
+def resolve_browser(name: str) -> str | None:
+    """Spoken browser name -> exe file name, or None."""
+    return BROWSERS.get(normalize(name)) if name else None
+
+
+def find_browser_path(exe: str) -> str | None:
+    """Find a browser's real install path via the registry (works wherever it is installed)."""
+    if not IS_WINDOWS or not exe:
+        return None
+    import winreg
+    key_path = rf"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\{exe}"
+    for hive in (winreg.HKEY_CURRENT_USER, winreg.HKEY_LOCAL_MACHINE):
+        try:
+            with winreg.OpenKey(hive, key_path) as k:
+                path = winreg.QueryValue(k, None)
+                if path and Path(path.strip('"')).exists():
+                    return path.strip('"')
+        except OSError:
+            continue
+    return None
+
+
 # ----------------------------------------------------------------- executor
 
 PROTECTED_PROCESSES = {
@@ -287,6 +364,9 @@ class Executor:
             return ActionResult(False, "Nothing to launch.")
         if re.match(r"^https?://", t, re.I):
             return self.open_url(t)
+        site = resolve_site(t) if not re.search(r"[\\/]", t) else None
+        if site and self.apps.match(t).status != "match":
+            return self.open_urls([site[1]])
         if re.match(r"^(shell:|ms-settings:|steam://|spotify:|discord://)", t, re.I):
             return self._run(f"Opening {t}", lambda: os.startfile(t))
         p = Path(os.path.expandvars(t))
@@ -361,18 +441,32 @@ class Executor:
         u = self.normalize_url(url)
         if not u:
             return ActionResult(False, f"'{url}' doesn't look like a valid web address.")
-        res = self._run(f"Opening {u}", lambda: webbrowser.open(u))
-        res.data["url"] = u
+        return self.open_urls([u])
+
+    def open_urls(self, urls: list[str], browser: str | None = None) -> ActionResult:
+        """Open one or more URLs, in a specific browser if asked (e.g. 'chrome'), else the default browser."""
+        exe_name = resolve_browser(browser) if browser else None
+        exe_path = find_browser_path(exe_name) if exe_name else None
+        where = f" in {browser}" if browser else ""
+
+        def go():
+            if exe_path:
+                subprocess.Popen([exe_path, *urls])          # Chrome/Edge/Firefox open each URL in a new tab
+            elif exe_name and IS_WINDOWS:
+                subprocess.Popen(["cmd", "/c", "start", "", exe_name, *urls], creationflags=CREATE_NO_WINDOW)
+            else:
+                for u in urls:
+                    webbrowser.open_new_tab(u)
+        res = self._run(f"Opening {', '.join(urls)}{where}", go)
+        res.data.update({"urls": urls, "url": urls[0] if urls else None, "browser": browser, "browser_path": exe_path})
         return res
 
-    def web_search(self, query: str) -> ActionResult:
+    def web_search(self, query: str, browser: str | None = None) -> ActionResult:
         q = (query or "").strip()
         if not q:
             return ActionResult(False, "What should I search for?")
         url = "https://www.google.com/search?q=" + urllib.parse.quote_plus(q)
-        res = self._run(f"Searching the web for {q}", lambda: webbrowser.open(url))
-        res.data["url"] = url
-        return res
+        return self.open_urls([url], browser)
 
     # ---- media / system
     def media(self, key: str) -> ActionResult:

@@ -29,7 +29,9 @@ backend/
 │   ├── check_setup.py   Pre-flight check of GPU, Ollama, apps, mic, STT and TTS
 │   └── test_client.py   Tablet simulator: discovery → PIN → telemetry → chat
 ├── tests/           Automated test suite (pytest)
-├── setup.bat / check.bat / run.bat
+├── hotkey.py        Global quit shortcut (Ctrl+Shift+Q)
+├── setup.bat / check.bat / run.bat / gpu_voice.bat
+├── startup_on.bat / startup_off.bat / autostart.bat   (start with Windows)
 └── requirements.txt
 ```
 
@@ -80,6 +82,14 @@ netsh advfirewall firewall add rule name="AI Command Center TCP" dir=in action=a
 netsh advfirewall firewall add rule name="AI Command Center UDP" dir=in action=allow protocol=UDP localport=37020 profile=private
 ```
 
+### Start automatically with Windows
+Run `startup_on.bat` once. From then on JARVIS starts **minimized** about 15 seconds after you log in
+(the taskbar window titled *JARVIS - AI Command Center* shows the PIN and logs). `startup_off.bat` turns it off.
+If Ollama is still starting up, JARVIS waits for it automatically.
+
+### Getting updates
+Inside the `ai-command-center` folder, run `git pull` (or click **Sync / Pull** in VS Code's Source Control panel), then restart JARVIS.
+
 ---
 
 ## Testing & verifying Phase 1
@@ -123,13 +133,27 @@ python tools\test_client.py                :: interactive chat with JARVIS (/yes
 `python test_client.py --check`. That proves discovery and pairing work across devices.
 
 ### 4. Voice test
-With the server running, say **"Hey Jarvis"**, wait for the beep, then speak a command:
+The wake word is **"Hey Jarvis"** (openWakeWord's pre-trained `hey_jarvis` model). It also usually reacts
+to "Hi Jarvis" or just "Jarvis". With the server running, say it, wait for the beep, then speak a command:
 - "Open Notepad" / "افتح المفكرة"
 - "What's my GPU usage?"
 - "Turn the volume up"
 - "Shut down the computer" → JARVIS asks *"Are you sure?"* → answer "no" (no wake word needed for the answer)
 
-The server window logs every step (wake word → transcript → intent → action).
+- "Open YouTube, Instagram and WhatsApp on Chrome" / "افتح يوتيوب وانستقرام في كروم"
+- "Close Spotify" → "Are you sure you want to close Spotify?" → "Yes" / "Yes, close it" / "نعم"
+
+The server window logs every step, plus a **timing line** for each command, e.g.
+`Timing: you spoke 1.8s | speech-to-text 0.45s (cpu) | JARVIS 0.00s (rules) | voice 0.80s | reply started 2.0s after you stopped talking`.
+That shows exactly which stage is slow.
+
+**Quit JARVIS:** press **Ctrl+Shift+Q** from any app (change it with `QUIT_HOTKEY` in `.env`), or press Ctrl+C in the server window.
+
+### Speed tips
+- Simple commands (open / close / volume / media / yes / no) skip the AI model and run instantly ("via rules" in the log).
+- `gpu_voice.bat` (optional) lets speech recognition run on the RTX GPU instead of the CPU. This is the biggest speed-up.
+- `END_SILENCE_MS=500` in `.env` makes JARVIS start processing sooner after you stop talking (it may cut off slow speakers).
+- `WHISPER_MODEL=base` is faster on the CPU but less accurate, especially in Arabic.
 
 ---
 
@@ -174,4 +198,8 @@ Copy `backend/.env.example` → `backend/.env` (`setup.bat` does this). The most
 | `STT_LANGUAGE` | auto | force `ar` or `en` |
 | `MIC_DEVICE` | Windows default | number from `check.bat` |
 | `DRY_RUN` | `false` | `true` = log actions only |
+| `QUIT_HOTKEY` | `ctrl+shift+q` | global shortcut to shut JARVIS down |
+| `END_SILENCE_MS` | `700` | silence needed before JARVIS processes your command |
+| `FAST_COMMANDS` | `true` | instant local handling of simple commands |
+| `OLLAMA_KEEP_ALIVE` | `-1` | keep the model loaded in VRAM forever (no reload delay) |
 | `VOICE_ENABLED` | `true` | |

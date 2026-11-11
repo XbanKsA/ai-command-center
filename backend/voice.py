@@ -101,13 +101,14 @@ class STT:
                     log.warning("Whisper on %s failed: %s", dev, exc)
             raise RuntimeError(f"Could not load Whisper: {last}")
 
-    def transcribe(self, audio) -> tuple[str, str]:
-        """audio = float32 numpy array @16 kHz, or a file-like / bytes (any format ffmpeg/PyAV can read)."""
+    def transcribe(self, audio, language: str | None = None) -> tuple[str, str]:
+        """audio = float32 numpy array @16 kHz, or a file-like / bytes (any format ffmpeg/PyAV can read).
+        language = optional hint ('en'/'ar'); defaults to STT_LANGUAGE or auto-detect."""
         self.load()
         if isinstance(audio, (bytes, bytearray)):
             audio = io.BytesIO(audio)
         try:
-            return self._run(audio)
+            return self._run(audio, language)
         except Exception as exc:
             if self.device == "cuda":    # e.g. missing CUDA DLLs only show up at inference time
                 log.warning("GPU transcription failed (%s) -> switching Whisper to CPU", exc)
@@ -115,27 +116,40 @@ class STT:
                     self._load("cpu")
                 if hasattr(audio, "seek"):
                     audio.seek(0)
-                return self._run(audio)
+                return self._run(audio, language)
             raise
 
-    def _run(self, audio) -> tuple[str, str]:
-        segments, info = self.model.transcribe(audio, language=self.language, beam_size=1,
-                                               vad_filter=True, condition_on_previous_text=False)
+    def _run(self, audio, language: str | None = None) -> tuple[str, str]:
+        segments, info = self.model.transcribe(audio, language=self.language or language, beam_size=1,
+                                               vad_filter=True, condition_on_previous_text=False,
+                                               without_timestamps=True)
         text = " ".join(s.text.strip() for s in segments).strip()
         return text, info.language
 
 
 class TTS:
-    def __init__(self, voice: str, voice_arabic: str):
+    def __init__(self, voice: str, voice_arabic: str, cache_size: int = 200):
         self.voice = voice
         self.voice_arabic = voice_arabic
+        self._cache: dict[tuple[str, str], bytes] = {}     # repeated replies ("Opening Chrome.") play instantly
+        self._cache_size = cache_size
 
     def pick_voice(self, text: str) -> str:
         return self.voice_arabic if _ARABIC.search(text or "") else self.voice
 
     async def synthesize(self, text: str) -> bytes:
+        key = (self.pick_voice(text), text)
+        if key in self._cache:
+            return self._cache[key]
+        mp3 = await self._synthesize(text, key[0])
+        if len(self._cache) >= self._cache_size:
+            self._cache.pop(next(iter(self._cache)))
+        self._cache[key] = mp3
+        return mp3
+
+    async def _synthesize(self, text: str, voice: str) -> bytes:
         import edge_tts
-        comm = edge_tts.Communicate(text, self.pick_voice(text))
+        comm = edge_tts.Communicate(text, voice)
         audio = bytearray()
         async for chunk in comm.stream():
             if chunk["type"] == "audio":
@@ -182,6 +196,7 @@ class VoiceEngine:
                        "listening": False, "busy": False, "last_heard": None, "last_error": None}
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
+        self._vad = None
         self._speak_lock = threading.Lock()
 
     # ---------------------------------------------------------------- lifecycle
@@ -196,17 +211,21 @@ class VoiceEngine:
         self._stop.set()
 
     # ---------------------------------------------------------------- speaking
-    def speak(self, text: str) -> None:
-        """Blocking: synthesize with edge-tts and play on the PC speakers."""
+    def speak(self, text: str) -> float:
+        """Blocking: synthesize with edge-tts and play on the PC speakers. Returns synthesis time (s)."""
         if not text:
-            return
+            return 0.0
+        t0 = time.perf_counter()
         try:
             mp3 = asyncio.run_coroutine_threadsafe(self.tts.synthesize(text), self.loop).result(timeout=30)
+            synth = time.perf_counter() - t0
             with self._speak_lock:
                 self.tts.play_mp3(mp3)
+            return synth
         except Exception as exc:
             self.status["last_error"] = f"TTS: {exc}"
             log.warning("TTS failed (%s). Text was: %s", exc, text)
+            return time.perf_counter() - t0
 
     # ---------------------------------------------------------------- main loop
     def _mic_device(self):
@@ -234,6 +253,12 @@ class VoiceEngine:
             self.status["wake_word"] = f"error: {exc}"
             log.error("Wake word model failed to load: %s", exc)
             return
+        try:
+            from openwakeword.vad import VAD
+            self._vad = VAD()          # Silero voice-activity detector: knows when you stopped talking
+        except Exception as exc:
+            self._vad = None
+            log.warning("VAD unavailable (%s) -- using volume-based end-of-speech detection", exc)
 
         # Load Whisper in the background so first command isn't slow
         threading.Thread(target=self._preload_stt, daemon=True).start()
@@ -271,46 +296,69 @@ class VoiceEngine:
         except Exception as exc:
             self.status["stt"] = f"error: {exc}"
 
-    def _record_command(self, stream, noise_floor: float):
+    def _is_speech(self, samples, threshold: float) -> bool:
+        import numpy as np
+        if self._vad is not None:
+            return float(self._vad.predict(samples, frame_size=640)) > 0.5
+        return float(np.sqrt(np.mean(samples.astype(np.float32) ** 2))) > threshold
+
+    def _record_command(self, stream, noise_floor: float, max_wait: float = 4.0):
+        """Record until the user stops talking. Returns float32 audio, or None if nobody spoke."""
         import numpy as np
         threshold = max(500.0, noise_floor * 3)
-        frames, speech_started, silent_chunks = [], False, 0
+        end_chunks = max(3, round(self.s.end_silence_ms / 80))        # 80 ms per chunk
+        if self._vad is not None:
+            self._vad.reset_states()
+        frames, speech_chunks, silent_chunks = [], 0, 0
         start = time.time()
-        while time.time() - start < 10:
+        while time.time() - start < 12:
             chunk, _ = stream.read(CHUNK)
             samples = chunk[:, 0].copy()
             frames.append(samples)
-            loud = float(np.sqrt(np.mean(samples.astype(np.float32) ** 2))) > threshold
-            if loud:
-                speech_started, silent_chunks = True, 0
+            if self._is_speech(samples, threshold):
+                speech_chunks, silent_chunks = speech_chunks + 1, 0
             else:
                 silent_chunks += 1
-            if speech_started and silent_chunks >= 12:        # ~1 s of silence after speech
+            if speech_chunks >= 2 and silent_chunks >= end_chunks:      # spoke, then went quiet
                 break
-            if not speech_started and time.time() - start > 4:   # nobody spoke
+            if speech_chunks == 0 and time.time() - start > max_wait:   # nobody spoke
                 return None
-        return np.concatenate(frames).astype(np.float32) / 32768.0
+        # keep ~0.3 s before speech onset; drop the trailing silence
+        audio = np.concatenate(frames[: len(frames) - max(0, silent_chunks - 2)])
+        return audio.astype(np.float32) / 32768.0
 
     def _handle_wake(self, stream, noise_floor: float) -> None:
         self.status["busy"] = True
         try:
             # 1 command + up to 2 follow-ups (answering "are you sure?" / "which one?" needs no wake word)
-            for _turn in range(3):
+            lang_hint = None
+            for turn in range(3):
                 while stream.read_available >= CHUNK:     # discard audio captured while we were talking
                     stream.read(CHUNK)
                 _beep()
-                audio = self._record_command(stream, noise_floor)
+                t0 = time.perf_counter()
+                audio = self._record_command(stream, noise_floor, max_wait=4.0 if turn == 0 else 6.0)
                 if audio is None:
                     log.info("No command heard")
                     return
-                text, lang = self.stt.transcribe(audio)
+                t1 = time.perf_counter()
+                # follow-up answers ("yes") are short: reuse the language of the first command
+                text, lang = self.stt.transcribe(audio, language=lang_hint)
+                lang_hint = lang_hint or (lang if lang in ("en", "ar") else None)
+                t2 = time.perf_counter()
                 self.status["last_heard"] = text
                 log.info("Heard (%s): %s", lang, text)
                 if not text:
                     return
                 resp = asyncio.run_coroutine_threadsafe(self.on_command(text), self.loop).result(timeout=180)
+                t3 = time.perf_counter()
+                synth = 0.0
                 if self.s.speak_responses and resp.get("reply"):
-                    self.speak(resp["reply"])
+                    synth = self.speak(resp["reply"])
+                log.info("Timing: you spoke %.1fs | speech-to-text %.2fs (%s) | JARVIS %.2fs (%s) | voice %.2fs | "
+                         "reply started %.1fs after you stopped talking",
+                         t1 - t0, t2 - t1, self.stt.device, t3 - t2, resp.get("via", "?"), synth,
+                         (t2 - t1) + (t3 - t2) + synth + self.s.end_silence_ms / 1000)
                 if resp.get("status") not in ("needs_confirmation", "needs_choice", "needs_clarification"):
                     return
         except Exception as exc:

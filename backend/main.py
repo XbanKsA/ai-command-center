@@ -26,6 +26,7 @@ import json
 import logging
 import sys
 from contextlib import asynccontextmanager
+from typing import Callable
 
 from fastapi import Depends, FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
@@ -35,6 +36,7 @@ from auth import AuthError, AuthManager
 from config import SERVICE_ID, VERSION, Settings, get_settings
 from discovery import DiscoveryService, build_announcement, get_lan_ips
 from executor import AppIndex, Executor
+from hotkey import GlobalHotkey
 from hub import Client, Hub
 from jarvis import Jarvis
 from llm import OllamaClient
@@ -57,7 +59,7 @@ def setup_logging(level: str) -> None:
         logging.getLogger(noisy).setLevel(logging.WARNING)
 
 
-def print_banner(s: Settings, pin: str, ollama: dict, gpu: str | None) -> None:
+def print_banner(s: Settings, pin: str, ollama: dict, gpu: str | None, hotkey: GlobalHotkey | None = None) -> None:
     ips = get_lan_ips()
     line = "=" * 60
     spaced_pin = "  ".join(pin)
@@ -72,6 +74,9 @@ def print_banner(s: Settings, pin: str, ollama: dict, gpu: str | None) -> None:
     print(f"   Ollama          :   {ollama_txt}")
     print(f"   GPU telemetry   :   {gpu or 'not available'}")
     print(f"   Voice           :   {'ON (say: Hey Jarvis)' if s.voice_enabled else 'OFF'}")
+    if hotkey is not None:
+        hk = f"{s.quit_hotkey.upper()} = quit JARVIS" if hotkey.active else f"off ({hotkey.error})"
+        print(f"   Quit shortcut   :   {hk}")
     if s.dry_run:
         print("   DRY RUN         :   ON (actions are only logged)")
     print(f"{line}\n", flush=True)
@@ -87,12 +92,15 @@ class State:
     hub: Hub
     voice: VoiceEngine
     discovery: DiscoveryService | None = None
+    hotkey: GlobalHotkey | None = None
     tasks: list[asyncio.Task]
 
 
 def create_app(settings: Settings | None = None, llm: OllamaClient | None = None,
-               background: bool = True, pin: str | None = None) -> FastAPI:
-    """background=False disables UDP discovery, voice and the Ollama warm-up (used by tests)."""
+               background: bool = True, pin: str | None = None,
+               on_quit: Callable[[], None] | None = None) -> FastAPI:
+    """background=False disables UDP discovery, voice, hotkey and the Ollama warm-up (used by tests).
+    on_quit is called (from any thread) when the quit hotkey is pressed."""
     settings = settings or get_settings()
     st = State()
     st.settings = settings
@@ -104,8 +112,10 @@ def create_app(settings: Settings | None = None, llm: OllamaClient | None = None
         st.auth = AuthManager(settings.data_dir, settings.max_pin_attempts, settings.lockout_seconds, pin=pin)
         st.telemetry = TelemetryCollector()
         st.executor = Executor(dry_run=settings.dry_run, app_index=AppIndex())
-        st.llm = llm or OllamaClient(settings.ollama_url, settings.ollama_model, settings.ollama_timeout)
-        st.jarvis = Jarvis(st.llm, st.executor, st.telemetry, settings.confirm_timeout)
+        st.llm = llm or OllamaClient(settings.ollama_url, settings.ollama_model, settings.ollama_timeout,
+                                     settings.ollama_keep_alive)
+        st.jarvis = Jarvis(st.llm, st.executor, st.telemetry, settings.confirm_timeout,
+                           fast_commands=settings.fast_commands)
         st.hub = Hub()
         st.voice = VoiceEngine(settings, loop, on_command=lambda text: st.jarvis.handle_text(text, "voice"))
 
@@ -131,7 +141,15 @@ def create_app(settings: Settings | None = None, llm: OllamaClient | None = None
             st.voice.start()
             if ollama.get("model_installed"):
                 st.tasks.append(asyncio.create_task(warm_up()))
-        print_banner(settings, st.auth.pin, ollama, st.telemetry.gpu_name)
+            else:   # e.g. auto-started at login before Ollama finished starting
+                st.tasks.append(asyncio.create_task(wait_for_ollama()))
+            if settings.quit_hotkey.strip() and on_quit:
+                def quit_now():
+                    log.info("Quit shortcut pressed -- shutting JARVIS down")
+                    on_quit()
+                st.hotkey = GlobalHotkey(settings.quit_hotkey, quit_now)
+                st.hotkey.start()
+        print_banner(settings, st.auth.pin, ollama, st.telemetry.gpu_name, st.hotkey)
         log.info("Server ready on port %d", settings.port)
         try:
             yield
@@ -139,6 +157,8 @@ def create_app(settings: Settings | None = None, llm: OllamaClient | None = None
             for t in st.tasks:
                 t.cancel()
             st.voice.stop()
+            if st.hotkey:
+                st.hotkey.stop()
             if st.discovery:
                 await st.discovery.stop()
             st.telemetry.close()
@@ -151,6 +171,19 @@ def create_app(settings: Settings | None = None, llm: OllamaClient | None = None
             except Exception as exc:
                 log.debug("telemetry loop: %s", exc)
             await asyncio.sleep(settings.telemetry_interval)
+
+    async def wait_for_ollama(timeout: float = 300):
+        """Poll Ollama after startup; warm the model as soon as it becomes available."""
+        loop = asyncio.get_running_loop()
+        end = loop.time() + timeout
+        while loop.time() < end:
+            await asyncio.sleep(5)
+            h = await st.llm.health()
+            if h["model_installed"]:
+                log.info("Ollama is now available")
+                await warm_up()
+                return
+        log.warning("Ollama still not available after %ds -- JARVIS will keep retrying on each command", timeout)
 
     async def warm_up():
         """Load the model into VRAM now so the first real command is fast."""
@@ -174,6 +207,8 @@ def create_app(settings: Settings | None = None, llm: OllamaClient | None = None
             "gpu": {"available": st.telemetry.gpu_available, "name": st.telemetry.gpu_name,
                     "error": st.telemetry.gpu_error},
             "voice": st.voice.status,
+            "quit_hotkey": {"keys": settings.quit_hotkey, "active": bool(st.hotkey and st.hotkey.active),
+                            "error": st.hotkey.error if st.hotkey else None},
             "apps_indexed": len(st.executor.apps.entries), "app_index_errors": st.executor.apps.errors,
             "discovery": {"enabled": disc is not None, "port": settings.discovery_port,
                           "announcements_sent": disc.announcements_sent if disc else 0,
@@ -384,5 +419,14 @@ if __name__ == "__main__":
 
     _settings = get_settings()
     setup_logging(_settings.log_level)
-    uvicorn.run(create_app(_settings), host=_settings.host, port=_settings.port,
-                log_level=_settings.log_level, ws_ping_interval=20, ws_ping_timeout=20)
+    _server: uvicorn.Server | None = None
+
+    def _request_quit() -> None:
+        if _server is not None:
+            _server.should_exit = True       # uvicorn notices within ~0.1 s and shuts down cleanly
+
+    _config = uvicorn.Config(create_app(_settings, on_quit=_request_quit), host=_settings.host, port=_settings.port,
+                             log_level=_settings.log_level, ws_ping_interval=20, ws_ping_timeout=20)
+    _server = uvicorn.Server(_config)
+    _server.run()
+    print("JARVIS stopped. Goodbye.")

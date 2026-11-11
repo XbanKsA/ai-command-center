@@ -77,17 +77,25 @@ class Settings:
     ollama_url: str = field(default_factory=lambda: _get("OLLAMA_URL", "http://127.0.0.1:11434"))
     ollama_model: str = field(default_factory=lambda: _get("OLLAMA_MODEL", "qwen2.5-coder:3b"))
     ollama_timeout: float = field(default_factory=lambda: _get_float("OLLAMA_TIMEOUT", 60.0))
+    # how long Ollama keeps the model in VRAM: -1 = forever (fastest replies), or e.g. 30m
+    ollama_keep_alive: str = field(default_factory=lambda: _get("OLLAMA_KEEP_ALIVE", "-1"))
 
     # --- Execution ---
     # DRY_RUN=true -> JARVIS only *logs* actions instead of launching/closing anything.
     dry_run: bool = field(default_factory=lambda: _get_bool("DRY_RUN", False))
     confirm_timeout: int = field(default_factory=lambda: _get_int("CONFIRM_TIMEOUT", 60))
+    # understand simple commands (open/close/volume/yes/no) instantly without asking the LLM
+    fast_commands: bool = field(default_factory=lambda: _get_bool("FAST_COMMANDS", True))
+    # global keyboard shortcut that shuts JARVIS down (blank = disabled)
+    quit_hotkey: str = field(default_factory=lambda: _get("QUIT_HOTKEY", "ctrl+shift+q"))
 
     # --- Voice ---
     voice_enabled: bool = field(default_factory=lambda: _get_bool("VOICE_ENABLED", True))
     wake_word_model: str = field(default_factory=lambda: _get("WAKE_WORD_MODEL", "hey_jarvis"))
     wake_threshold: float = field(default_factory=lambda: _get_float("WAKE_THRESHOLD", 0.5))
     mic_device: str = field(default_factory=lambda: _get("MIC_DEVICE", ""))  # blank = Windows default mic
+    # silence (ms) after you stop talking before JARVIS starts processing
+    end_silence_ms: int = field(default_factory=lambda: _get_int("END_SILENCE_MS", 700))
     whisper_model: str = field(default_factory=lambda: _get("WHISPER_MODEL", "small"))
     whisper_device: str = field(default_factory=lambda: _get("WHISPER_DEVICE", "auto"))  # auto | cuda | cpu
     stt_language: str = field(default_factory=lambda: _get("STT_LANGUAGE", ""))  # blank = auto-detect

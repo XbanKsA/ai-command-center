@@ -77,3 +77,19 @@ def test_find_processes_never_returns_protected_or_self(dry_executor):
     found = dry_executor.find_processes("python")
     assert found == {}              # python is protected (that's us)
     assert dry_executor.find_processes("svchost") == {}
+
+
+def test_resolve_site_and_browser():
+    from executor import resolve_browser, resolve_site
+    assert resolve_site("YouTube") == ("YouTube", "https://www.youtube.com")
+    assert resolve_site("واتساب")[1] == "https://web.whatsapp.com"
+    assert resolve_site("example.org")[1] == "https://example.org"
+    assert resolve_site("notepad") is None
+    assert resolve_browser("Google Chrome") == "chrome.exe" and resolve_browser("كروم") == "chrome.exe"
+    assert resolve_browser("netscape") is None
+
+
+def test_open_urls_dry_run(dry_executor):
+    r = dry_executor.open_urls(["https://a.com", "https://b.com"], "chrome")
+    assert r.ok and r.data["urls"] == ["https://a.com", "https://b.com"] and r.data["browser"] == "chrome"
+    assert dry_executor.launch_target("youtube").data["url"] == "https://www.youtube.com"
