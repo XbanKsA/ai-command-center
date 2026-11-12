@@ -178,7 +178,7 @@ class ModeManager:
         own = sum(m["size_vram"] for m in await self.llm.loaded_models() if m["name"] in ours)
         own += int(self.own_extra_vram() or 0)
         self.total_gb = round(total / GB, 1)
-        self.effective_free_gb = round((free + own) / GB, 2)
+        self.effective_free_gb = round(min(free + own, total) / GB, 2)    # can never exceed the card
         return self.effective_free_gb
 
     async def poll_once(self, initial: bool = False) -> None:

@@ -216,7 +216,7 @@ def soft_normalize(text: str) -> str:
 # ------------------------------------------------------------------ AI mode commands
 
 MODE_WORDS = {
-    "gaming": ["gaming mode", "game mode", "gamer mode", "وضع الالعاب", "وضع الألعاب", "وضع اللعب", "وضع القيمنق",
+    "gaming": ["gaming mode", "game mode", "gamer mode", "gamemode", "وضع الالعاب", "وضع الألعاب", "وضع اللعب", "وضع القيمنق",
                "وضع القيمنج", "مود الالعاب"],
     "normal": ["normal mode", "full mode", "regular mode", "الوضع العادي", "وضع عادي", "الوضع الطبيعي", "الوضع الكامل"],
     "auto": ["auto mode", "automatic mode", "auto switching", "الوضع التلقائي", "وضع تلقائي", "الوضع الاوتوماتيكي",
@@ -237,8 +237,9 @@ def detect_mode_command(text: str) -> str | None:
     n = normalize(text)
     if len(n.split()) > 7 or any(q in n for q in MODEL_QUESTIONS):
         return None
+    compact = n.replace(" ", "")              # speech-to-text sometimes writes "automode", "gamingmode"
     for mode, words in MODE_WORDS.items():
-        if any(normalize(w) in n for w in words):
+        if any(normalize(w) in n or normalize(w).replace(" ", "") in compact for w in words):
             return mode
     return None
 

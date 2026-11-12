@@ -92,3 +92,20 @@ def test_end_of_speech_detection_with_vad():
         def read(self, n):
             return (np.zeros((n, 1), dtype=np.int16), False)
     assert eng._record_command(Quiet(), noise_floor=100, max_wait=0.05) is None
+
+
+def test_whisper_vram_measurement_sanity(monkeypatch):
+    """Startup race: the LLM loads while Whisper loads -> the measured difference is way too big."""
+    import sys, types
+    GB = 1024 ** 3
+    readings = iter([(10 * GB, 12 * GB), (5 * GB, 12 * GB)])      # 5 GB "used by Whisper" = impossible
+    stt = STT("small", device="cuda", vram_reader=lambda: next(readings))
+    fake = types.ModuleType("faster_whisper")
+    fake.WhisperModel = lambda *a, **k: object()
+    monkeypatch.setitem(sys.modules, "faster_whisper", fake)
+    stt._load("cuda")
+    assert stt.vram_bytes == int(0.8 * GB)                        # typical size used instead
+    readings2 = iter([(10 * GB, 12 * GB), (int(9.4 * GB), 12 * GB)])  # 0.6 GB = plausible -> measured
+    stt2 = STT("small", device="cuda", vram_reader=lambda: next(readings2))
+    stt2._load("cuda")
+    assert abs(stt2.vram_bytes - 0.6 * GB) < 0.01 * GB

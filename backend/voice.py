@@ -62,6 +62,19 @@ def cuda_usable() -> tuple[bool, str]:
     return True, ""
 
 
+# Typical VRAM of faster-whisper models in float16 on the GPU (GB) - used to sanity-check measurements
+WHISPER_VRAM_GB = {"tiny": 0.3, "base": 0.4, "small": 0.8, "medium": 1.8, "turbo": 1.8, "large": 3.5,
+                   "distil": 1.8}
+
+
+def whisper_vram_estimate(model_name: str) -> float:
+    name = model_name.lower()
+    for key, gb in WHISPER_VRAM_GB.items():
+        if key in name:
+            return gb
+    return 1.0
+
+
 class STT:
     """faster-whisper wrapper. Uses the NVIDIA GPU when the CUDA libraries are present, else CPU."""
 
@@ -84,11 +97,21 @@ class STT:
         self.model = WhisperModel(self.model_name, device=device, compute_type=compute)
         self.device = device
         self.vram_bytes = 0
-        if before:
-            after = self.vram_reader()
-            if after:
-                self.vram_bytes = max(0, before[0] - after[0])
-                log.info("Whisper uses %.1f GB of VRAM", self.vram_bytes / 1024 ** 3)
+        if device == "cuda":
+            # Measure, but don't trust a wild number: if the LLM was loading at the same moment,
+            # the difference includes part of the LLM too. Fall back to the known typical size.
+            est = whisper_vram_estimate(self.model_name)
+            after = self.vram_reader() if (before and self.vram_reader) else None
+            measured = (before[0] - after[0]) / 1024 ** 3 if (before and after) else None
+            if measured is not None and 0.1 <= measured <= est * 1.5:
+                gb = measured
+            else:
+                gb = est
+                if measured is not None:
+                    log.info("Whisper VRAM measurement (%.1f GB) looks off (other GPU activity) - using %.1f GB",
+                             measured, est)
+            self.vram_bytes = int(gb * 1024 ** 3)
+            log.info("Whisper uses ~%.1f GB of VRAM", gb)
 
     def load(self) -> None:
         with self._lock:

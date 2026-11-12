@@ -314,6 +314,7 @@ async def _settle(j):
     ("gaming mode", "gaming", "Gaming mode on. Switching to the lightweight model."),
     ("Switch to gaming mode please.", "gaming", "Gaming mode on. Switching to the lightweight model."),
     ("حول على وضع الالعاب", "gaming", "تم تفعيل وضع الألعاب. سأستخدم النموذج الخفيف."),
+    ("Swap to gamingmode.", "gaming", "Gaming mode on. Switching to the lightweight model."),
 ])
 async def test_voice_gaming_mode(jm, text, mode, reply):
     j, llm, m, said = jm
@@ -367,3 +368,10 @@ async def test_thinking_only_when_asked(jm):
     await j.handle_text("فكر فيها بعمق: ايش افضل لغة برمجة؟")
     assert llm.thinks == [None, True, True]
     assert any("think carefully" in msg["content"] for msg in llm.calls[1] if msg["role"] == "system")
+
+
+
+def test_compact_mode_words():
+    from jarvis import detect_mode_command
+    assert detect_mode_command("swap to automode") == "auto"
+    assert detect_mode_command("Normalmode please") == "normal"
