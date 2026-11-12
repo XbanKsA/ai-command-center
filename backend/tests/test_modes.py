@@ -230,3 +230,29 @@ async def test_whisper_vram_ignored_and_no_checks_while_busy(env):
     whisper["busy"] = False                        # a real game: switches
     await m.poll_once()
     assert m.active == "gaming"
+
+
+async def test_auto_thresholds_follow_real_model_size(env):
+    """Real PC: qwen3.5:9b = 5.6 GB. A busy desktop (3 GB) must NOT trigger gaming mode; Deadlock must."""
+    s, llm, gpu, clock, said, changes, make = env
+    s.vram_gaming_below_gb = s.vram_normal_above_gb = "auto"
+    s.vram_headroom_gb, s.vram_hysteresis_gb = 1.5, 1.0
+    llm.SIZES = {**llm.SIZES, "qwen3.5:9b": 5.6, "qwen3.5:4b": 3.1}
+    gpu.other_gb = 3.0                        # Windows + browser + Discord + VS Code, no game
+    m = make()
+    await m.poll_once(initial=True)
+    await m.poll_once()
+    assert m.normal_model_gb == pytest.approx(5.6, abs=0.01)
+    assert m.gaming_below == 7.1 and m.normal_above == 8.1
+    assert m.active == "normal"               # 9.0 GB free for others: fine (the old fixed 9.5 GB would flip here)
+    gpu.other_gb = 3.0 + 5.0                  # Deadlock takes ~5 GB
+    clock.t += 5
+    await m.poll_once()
+    assert m.active == "gaming" and llm.loaded == {"qwen3.5:4b": 3.1}
+    gpu.other_gb = 3.0                        # game closed
+    for _ in range(8):
+        clock.t += 5
+        await m.poll_once()
+    assert m.active == "normal"
+    assert make().normal_model_gb == pytest.approx(5.6, abs=0.01)    # learned size remembered after restart
+    assert m.status()["vram"]["thresholds_auto"] is True

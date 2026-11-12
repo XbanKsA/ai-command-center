@@ -84,8 +84,8 @@ def print_banner(s: Settings, pin: str, ollama: dict, gpu: str | None, hotkey: G
             print(f"   {role:<16}:   {m}  {'OK' if ok else 'MISSING -> run: ollama pull ' + m}")
     if modes is not None:
         if modes.requested == "auto" and modes.auto_available:
-            print(f"   Mode            :   AUTO (gaming below {s.vram_gaming_below_gb} GB free VRAM, "
-                  f"normal above {s.vram_normal_above_gb} GB for {s.normal_after_seconds:.0f}s)")
+            print(f"   Mode            :   AUTO (gaming below {modes.gaming_below} GB free VRAM, "
+                  f"normal above {modes.normal_above} GB for {s.normal_after_seconds:.0f}s)")
         elif modes.requested == "auto":
             print("   Mode            :   MANUAL (auto needs an NVIDIA GPU) - say 'gaming mode' / 'normal mode'")
         else:

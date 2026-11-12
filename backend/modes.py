@@ -57,6 +57,7 @@ class ModeManager:
         self.busy = busy or (lambda: False)                    # e.g. speech being transcribed right now
         self._file = Path(data_dir or settings.data_dir) / "mode.json"
 
+        self.normal_model_gb = 6.5          # until measured; qwen3.5:9b is ~5.6 GB at 4K context
         self.requested = self._load_requested()
         self.active = "normal"                      # profile in use: "normal" | "gaming"
         self.model = settings.model_normal          # model actually selected
@@ -69,6 +70,7 @@ class ModeManager:
         self.total_gb: float | None = None
         self._high_since: float | None = None
         self._warned_offline = False
+        self._last_logged_free: float | None = None
         self._last_announce = -1e9
         self.history: deque[dict] = deque(maxlen=20)
         self._switch_lock = asyncio.Lock()
@@ -81,7 +83,10 @@ class ModeManager:
     # ------------------------------------------------------------------ persistence
     def _load_requested(self) -> str:
         try:
-            v = json.loads(self._file.read_text(encoding="utf-8")).get("requested")
+            data = json.loads(self._file.read_text(encoding="utf-8"))
+            if data.get("normal_model") == self.s.model_normal and data.get("normal_model_gb"):
+                self.normal_model_gb = float(data["normal_model_gb"])
+            v = data.get("requested")
             if v in REQUESTS:
                 return v
         except Exception:
@@ -92,9 +97,46 @@ class ModeManager:
     def _save_requested(self) -> None:
         try:
             self._file.parent.mkdir(parents=True, exist_ok=True)
-            self._file.write_text(json.dumps({"requested": self.requested}), encoding="utf-8")
+            self._file.write_text(json.dumps({"requested": self.requested, "normal_model": self.s.model_normal,
+                                              "normal_model_gb": self.normal_model_gb}), encoding="utf-8")
         except Exception as exc:
             log.debug("could not save mode: %s", exc)
+
+    # ------------------------------------------------------------------ thresholds
+    @staticmethod
+    def _num(value) -> float | None:
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return None
+
+    @property
+    def gaming_below(self) -> float:
+        """Switch to gaming when free-VRAM-for-others drops below this many GB.
+        auto = what the normal model really needs (measured) + headroom, i.e. 'a game is crowding it out'."""
+        fixed = self._num(self.s.vram_gaming_below_gb)
+        if fixed is not None:
+            return fixed
+        return round(self.normal_model_gb + self.s.vram_headroom_gb, 1)
+
+    @property
+    def normal_above(self) -> float:
+        fixed = self._num(self.s.vram_normal_above_gb)
+        if fixed is not None:
+            return fixed
+        return round(self.gaming_below + self.s.vram_hysteresis_gb, 1)
+
+    def _learn_normal_size(self, loaded: list[dict]) -> None:
+        """Remember how much VRAM the normal model actually takes (from Ollama /api/ps)."""
+        names = {self.s.model_normal, f"{self.s.model_normal}:latest"}
+        for m in loaded:
+            if m["name"] in names and m["size_vram"] > 0:
+                gb = round(m["size_vram"] / GB, 2)
+                if abs(gb - self.normal_model_gb) > 0.05:
+                    self.normal_model_gb = gb
+                    log.info("%s uses %.1f GB of VRAM -> gaming mode below %.1f GB free, normal above %.1f GB",
+                             self.s.model_normal, gb, self.gaming_below, self.normal_above)
+                    self._save_requested()
 
     # ------------------------------------------------------------------ status
     @property
@@ -135,8 +177,10 @@ class ModeManager:
             "models": {"normal": self.s.model_normal, "gaming": self.s.model_gaming,
                        "fallback": self.s.model_fallback},
             "vram": {"free_for_others_gb": self.effective_free_gb, "total_gb": self.total_gb,
-                     "gaming_below_gb": self.s.vram_gaming_below_gb,
-                     "normal_above_gb": self.s.vram_normal_above_gb,
+                     "gaming_below_gb": self.gaming_below,
+                     "normal_above_gb": self.normal_above,
+                     "thresholds_auto": self._num(self.s.vram_gaming_below_gb) is None,
+                     "normal_model_gb": self.normal_model_gb,
                      "normal_after_seconds": self.s.normal_after_seconds},
             "last_switch": self.history[-1] if self.history else None,
         }
@@ -175,7 +219,9 @@ class ModeManager:
         free, total = info
         ours = {self.s.model_normal, self.s.model_gaming, self.s.model_fallback}
         ours |= {m if ":" in m else f"{m}:latest" for m in ours}
-        own = sum(m["size_vram"] for m in await self.llm.loaded_models() if m["name"] in ours)
+        loaded = await self.llm.loaded_models()
+        self._learn_normal_size(loaded)
+        own = sum(m["size_vram"] for m in loaded if m["name"] in ours)
         own += int(self.own_extra_vram() or 0)
         self.total_gb = round(total / GB, 1)
         self.effective_free_gb = round(min(free + own, total) / GB, 2)    # can never exceed the card
@@ -199,23 +245,28 @@ class ModeManager:
                                announce=False, force=True)
             return
 
+        if free is not None and (self._last_logged_free is None or abs(free - self._last_logged_free) >= 0.5):
+            log.info("VRAM free for others: %.1f GB (%s mode; gaming below %.1f, normal above %.1f)",
+                     free, self.active, self.gaming_below, self.normal_above)
+            self._last_logged_free = free
+
         if not self.is_auto or free is None:
             return
 
         now = self.clock()
         if self.active == "normal":
             self._high_since = None
-            if free < self.s.vram_gaming_below_gb:
-                await self._switch("gaming", f"free VRAM {free:.1f} GB < {self.s.vram_gaming_below_gb} GB",
+            if free < self.gaming_below:
+                await self._switch("gaming", f"free VRAM {free:.1f} GB < {self.gaming_below} GB",
                                    source="auto")
         else:  # gaming: hysteresis - must stay high for a while before going back
-            if free > self.s.vram_normal_above_gb:
+            if free > self.normal_above:
                 if self._high_since is None:
                     self._high_since = now
                     log.info("Free VRAM %.1f GB > %.1f GB - back to normal in %.0fs if it stays high",
-                             free, self.s.vram_normal_above_gb, self.s.normal_after_seconds)
+                             free, self.normal_above, self.s.normal_after_seconds)
                 elif now - self._high_since >= self.s.normal_after_seconds:
-                    await self._switch("normal", f"free VRAM {free:.1f} GB > {self.s.vram_normal_above_gb} GB "
+                    await self._switch("normal", f"free VRAM {free:.1f} GB > {self.normal_above} GB "
                                                  f"for {self.s.normal_after_seconds:.0f}s", source="auto")
             else:
                 self._high_since = None
@@ -223,7 +274,7 @@ class ModeManager:
     def _initial_profile(self, free: float | None) -> str:
         if self.requested in ("gaming", "normal"):
             return self.requested
-        if free is not None and free < self.s.vram_gaming_below_gb:
+        if free is not None and free < self.gaming_below:
             return "gaming"
         return "normal"
 

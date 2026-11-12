@@ -109,3 +109,15 @@ def test_whisper_vram_measurement_sanity(monkeypatch):
     stt2 = STT("small", device="cuda", vram_reader=lambda: next(readings2))
     stt2._load("cuda")
     assert abs(stt2.vram_bytes - 0.6 * GB) < 0.01 * GB
+
+
+def test_speech_language_setting():
+    s = Settings()
+    s.stt_language, s.english_only = "", True
+    assert s.speech_language == "en"
+    s.english_only = False
+    assert s.speech_language == ""            # auto-detect
+    s.stt_language = "ar"
+    assert s.speech_language == "ar"          # explicit setting wins
+    eng = VoiceEngine(Settings(), asyncio.new_event_loop(), on_command=None)
+    assert eng.stt.language == "en"            # default: English only

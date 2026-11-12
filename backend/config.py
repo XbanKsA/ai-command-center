@@ -92,8 +92,12 @@ class Settings:
     # --- Modes: auto | gaming | normal (a manual choice is remembered until you set auto again) ---
     mode_default: str = field(default_factory=lambda: _get("MODE_DEFAULT", "auto"))
     # free VRAM is measured as if JARVIS's own model were NOT loaded (so it only reacts to games/apps)
-    vram_gaming_below_gb: float = field(default_factory=lambda: _get_float("VRAM_GAMING_BELOW_GB", 9.5))
-    vram_normal_above_gb: float = field(default_factory=lambda: _get_float("VRAM_NORMAL_ABOVE_GB", 10.5))
+    # "auto" = based on how much VRAM the normal model really needs (measured) + VRAM_HEADROOM_GB.
+    # Or set a fixed number of GB.
+    vram_gaming_below_gb: str = field(default_factory=lambda: _get("VRAM_GAMING_BELOW_GB", "auto"))
+    vram_normal_above_gb: str = field(default_factory=lambda: _get("VRAM_NORMAL_ABOVE_GB", "auto"))
+    vram_headroom_gb: float = field(default_factory=lambda: _get_float("VRAM_HEADROOM_GB", 1.5))
+    vram_hysteresis_gb: float = field(default_factory=lambda: _get_float("VRAM_HYSTERESIS_GB", 1.0))
     vram_poll_seconds: float = field(default_factory=lambda: _get_float("VRAM_POLL_SECONDS", 5.0))
     normal_after_seconds: float = field(default_factory=lambda: _get_float("NORMAL_AFTER_SECONDS", 30.0))
     announce_mode_changes: bool = field(default_factory=lambda: _get_bool("ANNOUNCE_MODE_CHANGES", True))
@@ -121,10 +125,17 @@ class Settings:
     end_silence_ms: int = field(default_factory=lambda: _get_int("END_SILENCE_MS", 700))
     whisper_model: str = field(default_factory=lambda: _get("WHISPER_MODEL", "small"))
     whisper_device: str = field(default_factory=lambda: _get("WHISPER_DEVICE", "auto"))  # auto | cuda | cpu
-    stt_language: str = field(default_factory=lambda: _get("STT_LANGUAGE", ""))  # blank = auto-detect
+    stt_language: str = field(default_factory=lambda: _get("STT_LANGUAGE", ""))  # blank = see ENGLISH_ONLY
+    # true = always transcribe speech as English (no wrong-language guesses). false = auto-detect (EN/AR)
+    english_only: bool = field(default_factory=lambda: _get_bool("ENGLISH_ONLY", True))
     tts_voice: str = field(default_factory=lambda: _get("TTS_VOICE", "en-GB-RyanNeural"))
     tts_voice_arabic: str = field(default_factory=lambda: _get("TTS_VOICE_ARABIC", "ar-SA-HamedNeural"))
     speak_responses: bool = field(default_factory=lambda: _get_bool("SPEAK_RESPONSES", True))
+
+    @property
+    def speech_language(self) -> str:
+        """Language forced on Whisper: STT_LANGUAGE if set, else 'en' when ENGLISH_ONLY, else auto ('')."""
+        return self.stt_language.strip() or ("en" if self.english_only else "")
 
     def ensure_dirs(self) -> None:
         self.data_dir.mkdir(parents=True, exist_ok=True)

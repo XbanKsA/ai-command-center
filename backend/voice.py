@@ -223,7 +223,7 @@ class VoiceEngine:
         self.s = settings
         self.loop = loop
         self.on_command = on_command
-        self.stt = STT(settings.whisper_model, settings.whisper_device, settings.stt_language, vram_reader)
+        self.stt = STT(settings.whisper_model, settings.whisper_device, settings.speech_language, vram_reader)
         self.tts = TTS(settings.tts_voice, settings.tts_voice_arabic)
         self.status = {"enabled": settings.voice_enabled, "wake_word": "not started", "stt": "not loaded",
                        "listening": False, "busy": False, "last_heard": None, "last_error": None}

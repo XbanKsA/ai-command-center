@@ -114,10 +114,9 @@ def main() -> int:
         if t.gpu_available:
             free, total = t.vram_info()
             free_gb = free / 1024 ** 3
-            mode = "GAMING" if free_gb < s.vram_gaming_below_gb else "NORMAL"
             report("Free VRAM right now", "PASS",
-                   f"{free_gb:.1f} of {total / 1024 ** 3:.1f} GB -> auto mode would pick {mode} "
-                   f"(gaming below {s.vram_gaming_below_gb} GB, normal above {s.vram_normal_above_gb} GB)")
+                   f"{free_gb:.1f} of {total / 1024 ** 3:.1f} GB (JARVIS switches to gaming mode when a game "
+                   f"leaves less room than the normal model needs + {s.vram_headroom_gb} GB)")
 
     section("Windows app discovery")
     from executor import IS_WINDOWS, AppIndex
@@ -178,7 +177,7 @@ def voice_checks(s, no_sound: bool) -> None:
 
     # Whisper
     from voice import STT, TTS
-    stt = STT(s.whisper_model, s.whisper_device, s.stt_language)
+    stt = STT(s.whisper_model, s.whisper_device, s.speech_language)
     t0 = time.time()
     print(f"  {D}Loading Whisper '{s.whisper_model}' (first time downloads the model, can take a few minutes)...{X}")
     try:
