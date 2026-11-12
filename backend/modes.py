@@ -46,7 +46,8 @@ class ModeManager:
                  on_change: Callable[[dict], Awaitable[None]] | None = None,
                  clock: Callable[[], float] = time.monotonic,
                  own_extra_vram: Callable[[], int] | None = None,
-                 busy: Callable[[], bool] | None = None):
+                 busy: Callable[[], bool] | None = None,
+                 game_detector=None):
         self.s = settings
         self.llm = llm
         self.read_vram = vram_reader
@@ -55,6 +56,8 @@ class ModeManager:
         self.clock = clock
         self.own_extra_vram = own_extra_vram or (lambda: 0)   # e.g. Whisper on the GPU
         self.busy = busy or (lambda: False)                    # e.g. speech being transcribed right now
+        self.games = game_detector                             # games.GameDetector (optional)
+        self.game = None                                       # the game running right now, if any
         self._file = Path(data_dir or settings.data_dir) / "mode.json"
 
         self.normal_model_gb = 6.5          # until measured; qwen3.5:9b is ~5.6 GB at 4K context
@@ -65,7 +68,7 @@ class ModeManager:
         self.missing: list[str] = []
         self.loaded_ok = False                      # target model successfully loaded at least once
         self.switching = False
-        self.auto_available = vram_reader() is not None
+        self.gpu_available = vram_reader() is not None
         self.effective_free_gb: float | None = None
         self.total_gb: float | None = None
         self._high_since: float | None = None
@@ -76,9 +79,15 @@ class ModeManager:
         self._switch_lock = asyncio.Lock()
         self._task: asyncio.Task | None = None
         self.llm.model = self.model
-        if not self.auto_available:
+        if not self.gpu_available and self.games is None:
             log.warning("AUTO mode unavailable: no NVIDIA GPU / pynvml -> manual mode only "
                         "(say 'gaming mode' or 'normal mode', or use the tablet toggle)")
+        elif not self.gpu_available:
+            log.warning("No NVIDIA GPU readings: auto mode will only react to game programs, not VRAM")
+
+    @property
+    def auto_available(self) -> bool:
+        return self.gpu_available or self.games is not None
 
     # ------------------------------------------------------------------ persistence
     def _load_requested(self) -> str:
@@ -170,6 +179,7 @@ class ModeManager:
             "requested": self.requested,               # auto | gaming | normal
             "auto": self.is_auto,
             "auto_available": self.auto_available,
+            "gpu_readings": self.gpu_available,
             "switching": self.switching,
             "fallback_in_use": self.fallback_in_use,
             "missing_models": list(self.missing),
@@ -182,6 +192,7 @@ class ModeManager:
                      "thresholds_auto": self._num(self.s.vram_gaming_below_gb) is None,
                      "normal_model_gb": self.normal_model_gb,
                      "normal_after_seconds": self.s.normal_after_seconds},
+            "game": str(self.game) if self.game else None,
             "last_switch": self.history[-1] if self.history else None,
         }
 
@@ -227,16 +238,28 @@ class ModeManager:
         self.effective_free_gb = round(min(free + own, total) / GB, 2)    # can never exceed the card
         return self.effective_free_gb
 
+    async def detect_game(self):
+        if self.games is None:
+            return None
+        try:
+            self.game = await asyncio.to_thread(self.games.scan)
+        except Exception as exc:
+            log.debug("game scan failed: %s", exc)
+        return self.game
+
     async def poll_once(self, initial: bool = False) -> None:
-        if self.switching or (not initial and self.loaded_ok and self.busy()):
+        if self.switching:
+            return
+        game = await self.detect_game()
+        if not initial and self.loaded_ok and self.busy() and not game:
             return          # don't measure while JARVIS itself is busy using the GPU (short spikes)
         free = await self.measure()
-        if free is None and self.auto_available:
-            self.auto_available = False
-            log.warning("Lost NVIDIA GPU readings -> AUTO mode unavailable, manual mode only")
-        elif free is not None and not self.auto_available:
-            self.auto_available = True
-            log.info("NVIDIA GPU readings available -> AUTO mode enabled")
+        if free is None and self.gpu_available:
+            self.gpu_available = False
+            log.warning("Lost NVIDIA GPU readings -> auto mode can only react to game programs now")
+        elif free is not None and not self.gpu_available:
+            self.gpu_available = True
+            log.info("NVIDIA GPU readings available -> VRAM-based auto switching enabled")
 
         if initial or not self.loaded_ok:
             # first start (or Ollama wasn't ready yet): choose a profile and load it
@@ -250,30 +273,37 @@ class ModeManager:
                      free, self.active, self.gaming_below, self.normal_above)
             self._last_logged_free = free
 
-        if not self.is_auto or free is None:
+        if not self.is_auto:
             return
 
         now = self.clock()
         if self.active == "normal":
             self._high_since = None
-            if free < self.gaming_below:
+            if game:
+                await self._switch("gaming", f"game started: {game}", source="auto")
+            elif free is not None and free < self.gaming_below:
                 await self._switch("gaming", f"free VRAM {free:.1f} GB < {self.gaming_below} GB",
                                    source="auto")
         else:  # gaming: hysteresis - must stay high for a while before going back
-            if free > self.normal_above:
+            if game:
+                self._high_since = None         # never leave gaming mode while a game is running
+            elif free is None or free > self.normal_above:
                 if self._high_since is None:
                     self._high_since = now
-                    log.info("Free VRAM %.1f GB > %.1f GB - back to normal in %.0fs if it stays high",
-                             free, self.normal_above, self.s.normal_after_seconds)
+                    log.info("No game and enough free VRAM - back to normal in %.0fs if it stays that way",
+                             self.s.normal_after_seconds)
                 elif now - self._high_since >= self.s.normal_after_seconds:
-                    await self._switch("normal", f"free VRAM {free:.1f} GB > {self.normal_above} GB "
-                                                 f"for {self.s.normal_after_seconds:.0f}s", source="auto")
+                    why = (f"free VRAM {free:.1f} GB > {self.normal_above} GB" if free is not None
+                           else "no game running") + f" for {self.s.normal_after_seconds:.0f}s"
+                    await self._switch("normal", why, source="auto")
             else:
                 self._high_since = None
 
     def _initial_profile(self, free: float | None) -> str:
         if self.requested in ("gaming", "normal"):
             return self.requested
+        if self.game:
+            return "gaming"
         if free is not None and free < self.gaming_below:
             return "gaming"
         return "normal"
@@ -281,6 +311,8 @@ class ModeManager:
     def _reason_for(self, target: str, free: float | None, initial: bool = False) -> str:
         if self.requested in ("gaming", "normal"):
             return f"manual {self.requested} mode"
+        if self.game:
+            return f"game running: {self.game}"
         if free is None:
             return "no GPU readings (auto unavailable)"
         return f"free VRAM {free:.1f} GB" + (" at startup" if initial else "")
@@ -300,6 +332,7 @@ class ModeManager:
             elif self.on_change:
                 await self.on_change(self.status())
         else:
+            await self.detect_game()
             free = await self.measure()
             target = self._initial_profile(free)
             if target != self.active or not self.loaded_ok:

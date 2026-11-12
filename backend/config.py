@@ -100,6 +100,12 @@ class Settings:
     vram_hysteresis_gb: float = field(default_factory=lambda: _get_float("VRAM_HYSTERESIS_GB", 1.0))
     vram_poll_seconds: float = field(default_factory=lambda: _get_float("VRAM_POLL_SECONDS", 5.0))
     normal_after_seconds: float = field(default_factory=lambda: _get_float("NORMAL_AFTER_SECONDS", 30.0))
+    # switch to gaming mode as soon as a game PROGRAM starts (Steam/Epic/Riot/... game folders)
+    game_detection: bool = field(default_factory=lambda: _get_bool("GAME_DETECTION", True))
+    # extra games installed elsewhere, e.g. "minecraft.exe, javaw.exe"
+    game_processes: str = field(default_factory=lambda: _get("GAME_PROCESSES", ""))
+    # programs in game folders that should NOT count as a game
+    game_ignore: str = field(default_factory=lambda: _get("GAME_IGNORE", ""))
     announce_mode_changes: bool = field(default_factory=lambda: _get_bool("ANNOUNCE_MODE_CHANGES", True))
     announce_min_interval: float = field(default_factory=lambda: _get_float("ANNOUNCE_MIN_INTERVAL", 60.0))
 

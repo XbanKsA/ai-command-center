@@ -22,7 +22,8 @@ backend/
 ├── telemetry.py     CPU / RAM (psutil) + NVIDIA GPU % / VRAM / temp (nvidia-ml-py), clock, uptime
 ├── jarvis.py        AI agent: text → structured intent (Ollama JSON schema) → safe execution
 ├── llm.py           Ollama client (switchable model, thinking on/off, load/unload)
-├── modes.py         Auto mode switching: Normal (qwen3.5:9b) <-> Gaming (qwen3.5:4b) by free VRAM
+├── modes.py         Auto mode switching: Normal (qwen3.5:9b) <-> Gaming (qwen3.5:4b)
+├── games.py         Detects a running game by its program (Steam/Epic/Riot/... game folders)
 ├── executor.py      Windows actions: dynamic Start Menu app matching, URLs, media keys, power
 ├── voice.py         "Hey Jarvis" wake word → Whisper speech-to-text → JARVIS → edge-tts voice
 ├── hub.py           Connected-tablet manager
@@ -174,11 +175,17 @@ Only one model is loaded at a time. On every switch, JARVIS waits for any reply 
 **warm-loads** the new one, logs the switch with a timestamp, and says "Gaming mode on…" / "Back to normal mode…".
 Announcements are never repeated within 60 s, and `ANNOUNCE_MODE_CHANGES=false` turns them off.
 
-**Auto detection:** every 5 s JARVIS measures *free VRAM for others*: the GPU's free VRAM **plus** what its own
-model (and Whisper) uses, so the 9B model never pushes JARVIS into gaming mode by itself.
-- Below **9.5 GB**, it switches to Gaming **immediately**, and the 9B is unloaded so it doesn't fight the game.
-- Above **10.5 GB for 30 s**, it switches back to Normal (the delay prevents flip-flopping).
-- With no NVIDIA GPU/pynvml, it uses manual mode only, with a warning in the log.
+**Auto detection:** two triggers, checked every 5 s.
+1. **A game program starts.** Anything running from a Steam / Epic / Riot / EA / Ubisoft / GOG / Xbox games folder
+   (e.g. Deadlock's `steamapps\common\Deadlock\…\project8.exe`) switches to Gaming **immediately**, before the game
+   has loaded much. Launchers, Steam itself and Wallpaper Engine are ignored. Add games installed elsewhere with
+   `GAME_PROCESSES=minecraft.exe, …`, and exclude tools with `GAME_IGNORE=…`.
+2. **VRAM backup:** JARVIS measures *free VRAM for others*: the GPU's free VRAM **plus** what its own model and
+   Whisper use (so the 9B never pushes JARVIS into gaming mode by itself). If that drops below what the 9B really needs
+   (measured, ~5.6 GB) + 1.5 GB headroom (≈ **7.1 GB**), it switches to Gaming.
+
+Back to Normal only when **no game is running** and VRAM has stayed free for **30 s** (prevents flip-flopping).
+With no NVIDIA GPU/pynvml, it relies on game detection only. You can set fixed thresholds with `VRAM_GAMING_BELOW_GB=7.5` etc.
 
 **Manual override:** say **"gaming mode"**, **"normal mode"** or **"auto mode"** (or Arabic: "وضع الألعاب", "الوضع العادي",
 "الوضع التلقائي"). A manual choice stays (even after a restart) until you say "auto mode".
@@ -187,17 +194,18 @@ Ask **"which model are you using?"** / "وش الموديل اللي تستخد�
 **Thinking:** off by default, so voice replies are fast. Say "**think about it**", "think carefully", "deep analysis" or "فكر فيها"
 to turn it on for that one request.
 
-All numbers are in `.env`: `MODEL_NORMAL`, `MODEL_GAMING`, `MODEL_FALLBACK`, `VRAM_GAMING_BELOW_GB`,
-`VRAM_NORMAL_ABOVE_GB`, `NORMAL_AFTER_SECONDS`, `VRAM_POLL_SECONDS`, `ANNOUNCE_MODE_CHANGES`, `ANNOUNCE_MIN_INTERVAL`,
-`THINK_DEFAULT`, `UNLOAD_ON_EXIT`.
+All settings are in `.env`: `MODEL_NORMAL`, `MODEL_GAMING`, `MODEL_FALLBACK`, `GAME_DETECTION`, `GAME_PROCESSES`,
+`GAME_IGNORE`, `VRAM_GAMING_BELOW_GB` / `VRAM_NORMAL_ABOVE_GB` (`auto` or GB), `VRAM_HEADROOM_GB`, `VRAM_HYSTERESIS_GB`,
+`NORMAL_AFTER_SECONDS`, `VRAM_POLL_SECONDS`, `ANNOUNCE_MODE_CHANGES`, `ANNOUNCE_MIN_INTERVAL`, `THINK_DEFAULT`,
+`UNLOAD_ON_EXIT`, `ENGLISH_ONLY`.
 
 ### Test checklist for the modes
 1. **Start JARVIS** (`run.bat`). The banner shows all three models `OK` and `Mode: AUTO`. The log shows
    `STARTUP: NORMAL mode … loaded qwen3.5:9b`.
 2. **Ask** "Hey Jarvis, which model are you using?" → *"I'm using qwen3.5:9b, the full model, in normal mode, switching automatically."*
-3. **Start a game.** Within ~5 s the log shows `MODE SWITCH NORMAL -> GAMING … free VRAM x GB < 9.5 GB` and JARVIS says
-   *"Gaming mode on…"*. Check `ollama ps`: only `qwen3.5:4b` is loaded.
-4. **Close the game.** About 30 s later: `MODE SWITCH GAMING -> NORMAL` and *"Back to normal mode…"* (or a log line
+3. **Start a game.** Within ~5 s of launch the log shows `Game detected: Deadlock (project8.exe)` and
+   `MODE SWITCH NORMAL -> GAMING … game started`, and JARVIS says *"Gaming mode on…"*. Check `ollama ps`: only `qwen3.5:4b` is loaded.
+4. **Close the game.** The log shows `Game closed`, and about 30 s later `MODE SWITCH GAMING -> NORMAL` and *"Back to normal mode…"* (or a log line
    saying the announcement was skipped, if the last one was under 60 s ago).
 5. **Manual override:** say "gaming mode", start no game, wait a minute: it stays in gaming mode. Restart JARVIS: still gaming.
    Say "auto mode": it goes back to normal.
@@ -206,8 +214,9 @@ All numbers are in `.env`: `MODEL_NORMAL`, `MODEL_GAMING`, `MODEL_FALLBACK`, `VR
    a normal question doesn't say "thinking".
 8. **Exit** with Ctrl+Shift+Q, then run `ollama ps`. Nothing is loaded (VRAM freed).
 
-If it switches when it shouldn't (or not when it should), compare the `free VRAM … GB` numbers in the log with the thresholds
-and adjust `VRAM_GAMING_BELOW_GB` / `VRAM_NORMAL_ABOVE_GB` in `.env`.
+If a game isn't detected, add its `.exe` name to `GAME_PROCESSES`. If something that isn't a game keeps JARVIS in gaming
+mode, the log names it (`Game detected: …`), so add it to `GAME_IGNORE`. For VRAM-based switching, compare the
+`VRAM free for others: X GB` lines in the log with the thresholds.
 
 ---
 
@@ -248,7 +257,9 @@ Copy `backend/.env.example` → `backend/.env` (`setup.bat` does this). The most
 | Setting | Default | |
 |---|---|---|
 | `MODEL_NORMAL` / `MODEL_GAMING` | `qwen3.5:9b` / `qwen3.5:4b` | see *AI modes* above |
-| `VRAM_GAMING_BELOW_GB` / `VRAM_NORMAL_ABOVE_GB` | `9.5` / `10.5` | auto-switch thresholds |
+| `GAME_DETECTION` / `GAME_PROCESSES` | `true` / empty | switch to gaming mode when a game program starts |
+| `VRAM_GAMING_BELOW_GB` / `VRAM_NORMAL_ABOVE_GB` | `auto` | VRAM backup thresholds (auto = from the 9B's real size) |
+| `ENGLISH_ONLY` | `true` | always understand speech as English |
 | `WAKE_THRESHOLD` | `0.5` | higher = fewer false wake-ups |
 | `WHISPER_MODEL` | `small` | `medium` is more accurate (especially for Arabic) but slower |
 | `WHISPER_DEVICE` | `auto` | uses the GPU only if the CUDA libraries are found, otherwise the CPU (fine for short commands). Optional GPU speech: `pip install nvidia-cublas-cu12 "nvidia-cudnn-cu12==9.*"` |

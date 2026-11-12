@@ -256,3 +256,58 @@ async def test_auto_thresholds_follow_real_model_size(env):
     assert m.active == "normal"
     assert make().normal_model_gb == pytest.approx(5.6, abs=0.01)    # learned size remembered after restart
     assert m.status()["vram"]["thresholds_auto"] is True
+
+
+class FakeGames:
+    def __init__(self):
+        self.running = None
+
+    def scan(self):
+        return self.running
+
+
+async def test_game_program_switches_before_vram_fills(env):
+    """Deadlock sizes its VRAM to what's free -> VRAM barely changes. The game process must trigger it."""
+    s, llm, gpu, clock, said, changes, make = env
+    s.vram_gaming_below_gb = s.vram_normal_above_gb = "auto"
+    s.vram_headroom_gb, s.vram_hysteresis_gb = 1.5, 1.0
+    llm.SIZES = {**llm.SIZES, "qwen3.5:9b": 5.6, "qwen3.5:4b": 3.1}
+    games = FakeGames()
+    gpu.other_gb = 2.5
+    m = ModeManager(s, llm, gpu, s.data_dir, announce=said.append, clock=clock, game_detector=games)
+    await m.poll_once(initial=True)
+    assert m.active == "normal"
+    games.running = "Deadlock (project8.exe)"      # game launched, VRAM still low
+    gpu.other_gb = 3.0
+    clock.t += 5
+    await m.poll_once()
+    assert m.active == "gaming" and m.history[-1]["reason"] == "game started: Deadlock (project8.exe)"
+    assert m.status()["game"] == "Deadlock (project8.exe)"
+    for _ in range(20):                            # plenty of free VRAM, but the game is still running
+        clock.t += 5
+        await m.poll_once()
+    assert m.active == "gaming"
+    games.running = None                           # game closed
+    clock.t += 5
+    await m.poll_once()
+    assert m.active == "gaming"                    # waits 30 s first
+    clock.t += 31
+    await m.poll_once()
+    assert m.active == "normal"
+
+
+async def test_game_running_at_startup_and_no_gpu(env):
+    s, llm, gpu, clock, said, changes, make = env
+    gpu.available = False
+    games = FakeGames()
+    games.running = "Deadlock (project8.exe)"
+    m = ModeManager(s, llm, gpu, s.data_dir, clock=clock, game_detector=games)
+    assert m.auto_available and not m.gpu_available
+    await m.poll_once(initial=True)
+    assert m.active == "gaming" and m.label() == "qwen3.5:4b, Gaming mode (auto)"
+    games.running = None
+    clock.t += 5
+    await m.poll_once()
+    clock.t += 31
+    await m.poll_once()
+    assert m.active == "normal"                    # works by game detection alone, without VRAM readings

@@ -38,6 +38,7 @@ from auth import AuthError, AuthManager
 from config import SERVICE_ID, VERSION, Settings, get_settings
 from discovery import DiscoveryService, build_announcement, get_lan_ips
 from executor import AppIndex, Executor
+from games import GameDetector
 from hotkey import GlobalHotkey
 from hub import Client, Hub
 from jarvis import Jarvis
@@ -84,8 +85,9 @@ def print_banner(s: Settings, pin: str, ollama: dict, gpu: str | None, hotkey: G
             print(f"   {role:<16}:   {m}  {'OK' if ok else 'MISSING -> run: ollama pull ' + m}")
     if modes is not None:
         if modes.requested == "auto" and modes.auto_available:
-            print(f"   Mode            :   AUTO (gaming below {modes.gaming_below} GB free VRAM, "
-                  f"normal above {modes.normal_above} GB for {s.normal_after_seconds:.0f}s)")
+            games = "when a game starts or " if s.game_detection else "when "
+            print(f"   Mode            :   AUTO (gaming {games}free VRAM < {modes.gaming_below} GB; "
+                  f"normal {s.normal_after_seconds:.0f}s after)")
         elif modes.requested == "auto":
             print("   Mode            :   MANUAL (auto needs an NVIDIA GPU) - say 'gaming mode' / 'normal mode'")
         else:
@@ -142,7 +144,9 @@ def create_app(settings: Settings | None = None, llm: OllamaClient | None = None
         st.modes = ModeManager(settings, st.llm, st.telemetry.vram_info, settings.data_dir,
                                announce=st.voice.announce if background else None, on_change=push_mode,
                                own_extra_vram=lambda: st.voice.stt.vram_bytes,
-                               busy=lambda: bool(st.voice.status.get("busy")))
+                               busy=lambda: bool(st.voice.status.get("busy")),
+                               game_detector=GameDetector(settings.game_processes, settings.game_ignore)
+                               if settings.game_detection else None)
         st.jarvis = Jarvis(st.llm, st.executor, st.telemetry, settings.confirm_timeout,
                            fast_commands=settings.fast_commands, modes=st.modes)
 
