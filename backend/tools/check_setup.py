@@ -78,25 +78,46 @@ def main() -> int:
 
     section("Local AI (Ollama)")
     from llm import OllamaClient
-    llm = OllamaClient(s.ollama_url, s.ollama_model, s.ollama_timeout)
+    llm = OllamaClient(s.ollama_url, s.model_normal, s.ollama_timeout)
     h = asyncio.run(llm.health())
     if not h["reachable"]:
         report("Ollama running", "FAIL", "install from https://ollama.com and start it")
     else:
         report("Ollama running", "PASS", s.ollama_url)
-        if h["model_installed"]:
-            report(f"Model {s.ollama_model}", "PASS")
+        installed = set(h["models"])
+        full = lambda m: m if ":" in m else f"{m}:latest"
+        for role, model in (("Normal mode model", s.model_normal), ("Gaming mode model", s.model_gaming),
+                            ("Fallback model", s.model_fallback)):
+            if full(model) in installed:
+                report(f"{role} {model}", "PASS")
+            else:
+                report(f"{role} {model}", "FAIL" if role != "Fallback model" else "WARN", f"run:  ollama pull {model}")
+        from jarvis import INTENT_SCHEMA, SYSTEM_PROMPT
+        for model in (s.model_gaming, s.model_normal):
+            if full(model) not in installed:
+                continue
+            llm.model = model
             t0 = time.time()
             try:
-                from jarvis import INTENT_SCHEMA, SYSTEM_PROMPT
+                asyncio.run(llm.warm(model))
+                load_s = time.time() - t0
+                t1 = time.time()
                 out = asyncio.run(llm.chat([{"role": "system", "content": SYSTEM_PROMPT},
-                                            {"role": "user", "content": "open notepad"}], schema=INTENT_SCHEMA))
-                report("Structured intent test", "PASS" if '"open_app"' in out else "WARN",
-                       f"({time.time() - t0:.1f}s) {out[:90]}")
+                                            {"role": "user", "content": "open notepad"}],
+                                           schema=INTENT_SCHEMA, think=False))
+                report(f"{model} answers (thinking off)", "PASS" if '"open_app"' in out.replace(" ", "") else "WARN",
+                       f"load {load_s:.1f}s, reply {time.time() - t1:.1f}s: {out[:70]}")
             except Exception as exc:
-                report("Structured intent test", "FAIL", str(exc))
-        else:
-            report(f"Model {s.ollama_model}", "FAIL", f"run:  ollama pull {s.ollama_model}")
+                report(f"{model} answers", "FAIL", str(exc))
+            finally:
+                asyncio.run(llm.unload(model))     # leave VRAM free; JARVIS loads what it needs
+        if t.gpu_available:
+            free, total = t.vram_info()
+            free_gb = free / 1024 ** 3
+            mode = "GAMING" if free_gb < s.vram_gaming_below_gb else "NORMAL"
+            report("Free VRAM right now", "PASS",
+                   f"{free_gb:.1f} of {total / 1024 ** 3:.1f} GB -> auto mode would pick {mode} "
+                   f"(gaming below {s.vram_gaming_below_gb} GB, normal above {s.vram_normal_above_gb} GB)")
 
     section("Windows app discovery")
     from executor import IS_WINDOWS, AppIndex

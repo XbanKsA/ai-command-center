@@ -202,6 +202,11 @@ async def run_check(host, port, pin, name) -> int:
 
     st = await request({"type": "get_status"}, "status")
     ok("Ollama reachable", st["ollama"]["reachable"], st["ollama"].get("error") or "")
+    md = st.get("mode", {})
+    ok("AI mode", not md.get("missing_models"), md.get("label", "?") +
+       ("" if not md.get("missing_models") else "  -> " + " / ".join(md.get("pull_commands", []))))
+    ok("Auto mode switching available", md.get("auto_available", False),
+       f"free VRAM for others: {md.get('vram', {}).get('free_for_others_gb')} GB")
     ok(f"Model '{st['ollama']['model']}' installed", st["ollama"]["model_installed"],
        "" if st["ollama"]["model_installed"] else f"run: ollama pull {st['ollama']['model']}")
     ok("Apps indexed from Start Menu", st["apps_indexed"] > 10, f"({st['apps_indexed']} apps)")
@@ -234,11 +239,14 @@ async def run_watch(ws, seconds: float):
             print(fmt_tel(m))
         elif m["type"] == "jarvis_event":
             print(f"{CYAN}[voice] you: {m['user_text']}  ->  JARVIS: {m['reply']}{RESET}")
+        elif m["type"] == "mode":
+            print(f"{YELLOW}[mode] {m.get('label')}{RESET}")
 
 
 async def run_interactive(ws):
     print(f"""{DIM}Type anything to talk to JARVIS. Commands:
-  /stats   /status   /apps <name>   /launch <path|url|app>   /yes   /no   /1 /2 /3   /watch   /quit{RESET}""")
+  /stats   /status   /mode [auto|gaming|normal]   /apps <name>   /launch <path|url|app>
+  /yes   /no   /1 /2 /3   /watch   /quit{RESET}""")
     state = {"pending": None, "latest_tel": None}
 
     async def reader():
@@ -264,6 +272,9 @@ async def run_interactive(ws):
                 for a in m["apps"]:
                     print(f"   {a['name']}  {DIM}({a['kind']}){RESET}")
                 print("> ", end="", flush=True)
+            elif t == "mode":
+                print(f"\n{YELLOW}[mode] {m.get('label')}{'  (switching...)' if m.get('switching') else ''}{RESET}")
+                print("> ", end="", flush=True)
             elif t == "status":
                 print("\n" + json.dumps({k: v for k, v in m.items() if k != "type"}, indent=2, ensure_ascii=False))
                 print("> ", end="", flush=True)
@@ -282,6 +293,9 @@ async def run_interactive(ws):
                 print(fmt_tel(state["latest_tel"]) if state["latest_tel"] else "no telemetry yet")
             elif line == "/status":
                 await ws.send(json.dumps({"type": "get_status"}))
+            elif line.startswith("/mode"):
+                arg = line[5:].strip()
+                await ws.send(json.dumps({"type": "set_mode", "mode": arg} if arg else {"type": "get_mode"}))
             elif line.startswith("/apps"):
                 await ws.send(json.dumps({"type": "list_apps", "query": line[5:].strip()}))
             elif line.startswith("/launch "):

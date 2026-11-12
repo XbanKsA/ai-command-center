@@ -105,6 +105,17 @@ class TelemetryCollector:
             "server_uptime": _fmt_duration(server_uptime),
         }
 
+    def vram_info(self) -> tuple[int, int] | None:
+        """(free_bytes, total_bytes) of the NVIDIA GPU, or None if unavailable."""
+        if not self._gpu_handle:
+            return None
+        try:
+            mem = self._nvml.nvmlDeviceGetMemoryInfo(self._gpu_handle)
+            return int(mem.free), int(mem.total)
+        except Exception as exc:
+            log.debug("VRAM read failed: %s", exc)
+            return None
+
     def spoken_summary(self) -> str:
         t = self.snapshot()
         parts = [f"CPU is at {t['cpu_percent']:.0f} percent", f"memory at {t['ram_percent']:.0f} percent"]

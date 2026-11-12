@@ -75,10 +75,33 @@ class Settings:
 
     # --- Local AI (Ollama) ---
     ollama_url: str = field(default_factory=lambda: _get("OLLAMA_URL", "http://127.0.0.1:11434"))
-    ollama_model: str = field(default_factory=lambda: _get("OLLAMA_MODEL", "qwen2.5-coder:3b"))
+    # Two-model auto mode switching (only one is loaded at a time)
+    model_normal: str = field(default_factory=lambda: _get("MODEL_NORMAL", "qwen3.5:9b"))
+    model_gaming: str = field(default_factory=lambda: _get("MODEL_GAMING", "qwen3.5:4b"))
+    # used if the mode's model isn't downloaded (OLLAMA_MODEL kept for older .env files)
+    model_fallback: str = field(default_factory=lambda: _get("MODEL_FALLBACK", _get("OLLAMA_MODEL", "qwen2.5-coder:3b")))
     ollama_timeout: float = field(default_factory=lambda: _get_float("OLLAMA_TIMEOUT", 60.0))
     # how long Ollama keeps the model in VRAM: -1 = forever (fastest replies), or e.g. 30m
     ollama_keep_alive: str = field(default_factory=lambda: _get("OLLAMA_KEEP_ALIVE", "-1"))
+    # free the model's VRAM when JARVIS exits
+    unload_on_exit: bool = field(default_factory=lambda: _get_bool("UNLOAD_ON_EXIT", True))
+    # "thinking" makes replies smarter but much slower: off unless you say "think about it"
+    think_default: bool = field(default_factory=lambda: _get_bool("THINK_DEFAULT", False))
+    think_timeout: float = field(default_factory=lambda: _get_float("THINK_TIMEOUT", 180.0))
+
+    # --- Modes: auto | gaming | normal (a manual choice is remembered until you set auto again) ---
+    mode_default: str = field(default_factory=lambda: _get("MODE_DEFAULT", "auto"))
+    # free VRAM is measured as if JARVIS's own model were NOT loaded (so it only reacts to games/apps)
+    vram_gaming_below_gb: float = field(default_factory=lambda: _get_float("VRAM_GAMING_BELOW_GB", 9.5))
+    vram_normal_above_gb: float = field(default_factory=lambda: _get_float("VRAM_NORMAL_ABOVE_GB", 10.5))
+    vram_poll_seconds: float = field(default_factory=lambda: _get_float("VRAM_POLL_SECONDS", 5.0))
+    normal_after_seconds: float = field(default_factory=lambda: _get_float("NORMAL_AFTER_SECONDS", 30.0))
+    announce_mode_changes: bool = field(default_factory=lambda: _get_bool("ANNOUNCE_MODE_CHANGES", True))
+    announce_min_interval: float = field(default_factory=lambda: _get_float("ANNOUNCE_MIN_INTERVAL", 60.0))
+
+    @property
+    def ollama_model(self) -> str:      # backwards compatibility
+        return self.model_normal
 
     # --- Execution ---
     # DRY_RUN=true -> JARVIS only *logs* actions instead of launching/closing anything.

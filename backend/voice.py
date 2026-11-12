@@ -65,8 +65,11 @@ def cuda_usable() -> tuple[bool, str]:
 class STT:
     """faster-whisper wrapper. Uses the NVIDIA GPU when the CUDA libraries are present, else CPU."""
 
-    def __init__(self, model_name: str = "small", device: str = "auto", language: str = ""):
+    def __init__(self, model_name: str = "small", device: str = "auto", language: str = "",
+                 vram_reader=None):
         self.model_name = model_name
+        self.vram_reader = vram_reader          # () -> (free, total) | None
+        self.vram_bytes = 0                     # VRAM Whisper itself occupies (so mode switching ignores it)
         self.device_pref = device
         self.language = language or None
         self.model = None
@@ -77,8 +80,15 @@ class STT:
         from faster_whisper import WhisperModel
         compute = "float16" if device == "cuda" else "int8"
         log.info("Loading Whisper '%s' on %s (%s)...", self.model_name, device, compute)
+        before = self.vram_reader() if (device == "cuda" and self.vram_reader) else None
         self.model = WhisperModel(self.model_name, device=device, compute_type=compute)
         self.device = device
+        self.vram_bytes = 0
+        if before:
+            after = self.vram_reader()
+            if after:
+                self.vram_bytes = max(0, before[0] - after[0])
+                log.info("Whisper uses %.1f GB of VRAM", self.vram_bytes / 1024 ** 3)
 
     def load(self) -> None:
         with self._lock:
@@ -186,11 +196,11 @@ CommandHandler = Callable[[str], Awaitable[dict]]
 
 
 class VoiceEngine:
-    def __init__(self, settings, loop: asyncio.AbstractEventLoop, on_command: CommandHandler):
+    def __init__(self, settings, loop: asyncio.AbstractEventLoop, on_command: CommandHandler, vram_reader=None):
         self.s = settings
         self.loop = loop
         self.on_command = on_command
-        self.stt = STT(settings.whisper_model, settings.whisper_device, settings.stt_language)
+        self.stt = STT(settings.whisper_model, settings.whisper_device, settings.stt_language, vram_reader)
         self.tts = TTS(settings.tts_voice, settings.tts_voice_arabic)
         self.status = {"enabled": settings.voice_enabled, "wake_word": "not started", "stt": "not loaded",
                        "listening": False, "busy": False, "last_heard": None, "last_error": None}
@@ -226,6 +236,12 @@ class VoiceEngine:
             self.status["last_error"] = f"TTS: {exc}"
             log.warning("TTS failed (%s). Text was: %s", exc, text)
             return time.perf_counter() - t0
+
+    def announce(self, text: str) -> None:
+        """Non-blocking: speak a notification (e.g. a mode change) in the background."""
+        if not self.s.speak_responses or not text:
+            return
+        threading.Thread(target=self.speak, args=(text,), name="announce", daemon=True).start()
 
     # ---------------------------------------------------------------- main loop
     def _mic_device(self):

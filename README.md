@@ -21,7 +21,8 @@ backend/
 ├── discovery.py     UDP 37020: broadcasts the PC's presence + answers discovery probes
 ├── telemetry.py     CPU / RAM (psutil) + NVIDIA GPU % / VRAM / temp (nvidia-ml-py), clock, uptime
 ├── jarvis.py        AI agent: text → structured intent (Ollama JSON schema) → safe execution
-├── llm.py           Ollama client
+├── llm.py           Ollama client (switchable model, thinking on/off, load/unload)
+├── modes.py         Auto mode switching: Normal (qwen3.5:9b) <-> Gaming (qwen3.5:4b) by free VRAM
 ├── executor.py      Windows actions: dynamic Start Menu app matching, URLs, media keys, power
 ├── voice.py         "Hey Jarvis" wake word → Whisper speech-to-text → JARVIS → edge-tts voice
 ├── hub.py           Connected-tablet manager
@@ -49,6 +50,9 @@ backend/
 
 ## Setup on the PC (Windows 11)
 
+**Models:** `ollama pull qwen3.5:9b` (Normal mode) and `ollama pull qwen3.5:4b` (Gaming mode).
+`qwen2.5-coder:3b` is kept as a fallback.
+
 **Requirements:** Python 3.11+ ([python.org](https://www.python.org/downloads/), tick *"Add to PATH"*),
 [Ollama](https://ollama.com/download), NVIDIA driver, a microphone, and an internet connection
 (only for the edge-tts voice and first-time model downloads).
@@ -58,8 +62,9 @@ backend/
 git clone https://github.com/XbanKsA/ai-command-center.git
 cd ai-command-center\backend
 
-:: 2. Pull the AI model (Ollama must be running, it starts with Windows after install)
-ollama pull qwen2.5-coder:3b
+:: 2. Pull the AI models (Ollama must be running, it starts with Windows after install)
+ollama pull qwen3.5:9b
+ollama pull qwen3.5:4b
 
 :: 3. Install everything (creates backend\.venv)
 setup.bat
@@ -157,6 +162,55 @@ That shows exactly which stage is slow.
 
 ---
 
+## AI modes: Normal / Gaming (auto switching)
+
+| Mode | Model | VRAM | When |
+|---|---|---|---|
+| **Normal** | `qwen3.5:9b` | ~8–9 GB | free VRAM is plentiful |
+| **Gaming** | `qwen3.5:4b` | ~4.5 GB | a game (or other app) is using the GPU |
+| Fallback | `qwen2.5-coder:3b` | ~2.5 GB | only if a mode's model isn't downloaded |
+
+Only one model is loaded at a time. On every switch, JARVIS waits for any reply in progress, **unloads** the old model,
+**warm-loads** the new one, logs the switch with a timestamp, and says "Gaming mode on…" / "Back to normal mode…".
+Announcements are never repeated within 60 s, and `ANNOUNCE_MODE_CHANGES=false` turns them off.
+
+**Auto detection:** every 5 s JARVIS measures *free VRAM for others*: the GPU's free VRAM **plus** what its own
+model (and Whisper) uses, so the 9B model never pushes JARVIS into gaming mode by itself.
+- Below **9.5 GB**, it switches to Gaming **immediately**, and the 9B is unloaded so it doesn't fight the game.
+- Above **10.5 GB for 30 s**, it switches back to Normal (the delay prevents flip-flopping).
+- With no NVIDIA GPU/pynvml, it uses manual mode only, with a warning in the log.
+
+**Manual override:** say **"gaming mode"**, **"normal mode"** or **"auto mode"** (or Arabic: "وضع الألعاب", "الوضع العادي",
+"الوضع التلقائي"). A manual choice stays (even after a restart) until you say "auto mode".
+Ask **"which model are you using?"** / "وش الموديل اللي تستخدمه؟" to hear the current model and mode.
+
+**Thinking:** off by default, so voice replies are fast. Say "**think about it**", "think carefully", "deep analysis" or "فكر فيها"
+to turn it on for that one request.
+
+All numbers are in `.env`: `MODEL_NORMAL`, `MODEL_GAMING`, `MODEL_FALLBACK`, `VRAM_GAMING_BELOW_GB`,
+`VRAM_NORMAL_ABOVE_GB`, `NORMAL_AFTER_SECONDS`, `VRAM_POLL_SECONDS`, `ANNOUNCE_MODE_CHANGES`, `ANNOUNCE_MIN_INTERVAL`,
+`THINK_DEFAULT`, `UNLOAD_ON_EXIT`.
+
+### Test checklist for the modes
+1. **Start JARVIS** (`run.bat`). The banner shows all three models `OK` and `Mode: AUTO`. The log shows
+   `STARTUP: NORMAL mode … loaded qwen3.5:9b`.
+2. **Ask** "Hey Jarvis, which model are you using?" → *"I'm using qwen3.5:9b, the full model, in normal mode, switching automatically."*
+3. **Start a game.** Within ~5 s the log shows `MODE SWITCH NORMAL -> GAMING … free VRAM x GB < 9.5 GB` and JARVIS says
+   *"Gaming mode on…"*. Check `ollama ps`: only `qwen3.5:4b` is loaded.
+4. **Close the game.** About 30 s later: `MODE SWITCH GAMING -> NORMAL` and *"Back to normal mode…"* (or a log line
+   saying the announcement was skipped, if the last one was under 60 s ago).
+5. **Manual override:** say "gaming mode", start no game, wait a minute: it stays in gaming mode. Restart JARVIS: still gaming.
+   Say "auto mode": it goes back to normal.
+6. **Tablet / API:** `python tools\test_client.py`, then `/mode`, `/mode gaming`, `/mode auto`. Each change shows `[mode] …` live.
+7. **Thinking:** "Hey Jarvis, think about it: is 12 GB of VRAM enough for gaming?" The log shows `LLM (qwen3.5:…, thinking)`;
+   a normal question doesn't say "thinking".
+8. **Exit** with Ctrl+Shift+Q, then run `ollama ps`. Nothing is loaded (VRAM freed).
+
+If it switches when it shouldn't (or not when it should), compare the `free VRAM … GB` numbers in the log with the thresholds
+and adjust `VRAM_GAMING_BELOW_GB` / `VRAM_NORMAL_ABOVE_GB` in `.env`.
+
+---
+
 ## WebSocket protocol (for the tablet app)
 
 Connect to `ws://<pc-ip>:8765/ws`. The first message must be `auth`:
@@ -170,6 +224,8 @@ Connect to `ws://<pc-ip>:8765/ws`. The first message must be `auth`:
 | `{"type":"launch","target":"C:\\Games\\game.exe"}` | `{"type":"launch_result","ok":true,…}` |
 | `{"type":"list_apps","query":"chr"}` | `{"type":"apps","apps":[…]}` |
 | `{"type":"get_status"}` / `{"type":"ping"}` | `status` / `pong` |
+| `{"type":"get_mode"}` | `{"type":"mode","label":"qwen3.5:4b, Gaming mode (auto)","mode":"gaming","requested":"auto",…}` |
+| `{"type":"set_mode","mode":"auto"\|"gaming"\|"normal"}` | `mode` (also **pushed to every tablet on each change**, and once right after connecting) |
 | | `{"type":"telemetry","cpu_percent":…,"ram_percent":…,"gpu_percent":…,"vram_percent":…,"clock":…,"system_uptime":…}` every 1.5 s |
 | | `{"type":"jarvis_event",…}` when someone talks to JARVIS on the PC mic |
 
@@ -177,7 +233,7 @@ Connect to `ws://<pc-ip>:8765/ws`. The first message must be `auth`:
 `needs_clarification`, `cancelled`, `failed`, `error`.
 
 **HTTP (header `Authorization: Bearer <token>`):** `POST /api/pair`, `GET /api/status`, `GET /api/telemetry`,
-`GET /api/apps?q=`, `POST /api/chat`, `POST /api/confirm`, `POST /api/launch`,
+`GET /api/apps?q=`, `GET /api/mode`, `POST /api/mode` (`{"mode":"gaming"}`), `POST /api/chat`, `POST /api/confirm`, `POST /api/launch`,
 `POST /api/voice` (raw push-to-talk audio such as webm/ogg/wav, returns the transcript + JARVIS reply), `GET /api/tts?text=` (mp3).
 Public: `GET /api/health`, `GET /api/discover`.
 
@@ -191,7 +247,8 @@ Copy `backend/.env.example` → `backend/.env` (`setup.bat` does this). The most
 
 | Setting | Default | |
 |---|---|---|
-| `OLLAMA_MODEL` | `qwen2.5-coder:3b` | `qwen2.5:7b` is a stronger *conversational* model and fits easily in the RTX 5070's 12 GB |
+| `MODEL_NORMAL` / `MODEL_GAMING` | `qwen3.5:9b` / `qwen3.5:4b` | see *AI modes* above |
+| `VRAM_GAMING_BELOW_GB` / `VRAM_NORMAL_ABOVE_GB` | `9.5` / `10.5` | auto-switch thresholds |
 | `WAKE_THRESHOLD` | `0.5` | higher = fewer false wake-ups |
 | `WHISPER_MODEL` | `small` | `medium` is more accurate (especially for Arabic) but slower |
 | `WHISPER_DEVICE` | `auto` | uses the GPU only if the CUDA libraries are found, otherwise the CPU (fine for short commands). Optional GPU speech: `pip install nvidia-cublas-cu12 "nvidia-cudnn-cu12==9.*"` |

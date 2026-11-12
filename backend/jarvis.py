@@ -31,7 +31,8 @@ log = logging.getLogger("jarvis")
 
 INTENTS = [
     "chat", "open_app", "close_app", "open_url", "web_search", "media_control", "system_stats",
-    "lock_pc", "sleep_pc", "shutdown_pc", "restart_pc", "cancel_shutdown", "confirm", "deny", "unknown",
+    "lock_pc", "sleep_pc", "shutdown_pc", "restart_pc", "cancel_shutdown", "confirm", "deny",
+    "set_mode", "model_info", "unknown",
 ]
 MEDIA_TARGETS = ["play_pause", "next", "previous", "stop", "mute", "volume_up", "volume_down"]
 
@@ -61,6 +62,8 @@ Intents:
 - system_stats: user asks about CPU / GPU / RAM / performance / temperature.
 - lock_pc, sleep_pc, shutdown_pc, restart_pc, cancel_shutdown: target = "".
 - confirm / deny: the user answers yes / no to a question you just asked.
+- set_mode: switch your AI mode. target = "gaming", "normal" or "auto".
+- model_info: the user asks which AI model / mode you are using.
 - unknown: the request is unclear or impossible. "reply" = a short clarifying question.
 
 Rules:
@@ -110,6 +113,16 @@ MESSAGES = {
     "unclear": {"en": "Sorry, I didn't catch that. Could you rephrase?", "ar": "عذراً، لم أفهم. هل يمكنك إعادة الصياغة؟"},
     "bad_url": {"en": "That doesn't look like a valid website.", "ar": "هذا لا يبدو كموقع صحيح."},
     "yes_or_no": {"en": "Please answer yes or no.", "ar": "من فضلك أجب بنعم أو لا."},
+    "mode_gaming": {"en": "Gaming mode on. Switching to the lightweight model.",
+                    "ar": "تم تفعيل وضع الألعاب. سأستخدم النموذج الخفيف."},
+    "mode_normal": {"en": "Back to normal mode. Using the full model.",
+                    "ar": "عدنا إلى الوضع العادي. سأستخدم النموذج الكامل."},
+    "mode_auto": {"en": "Auto mode on. I'll pick the model based on your free GPU memory.",
+                  "ar": "تم تفعيل الوضع التلقائي. سأختار النموذج حسب ذاكرة كرت الشاشة."},
+    "mode_auto_unavailable": {"en": "Auto mode needs NVIDIA GPU readings, which aren't available, so I'm staying in {mode} mode.",
+                              "ar": "الوضع التلقائي يحتاج قراءات كرت NVIDIA وهي غير متاحة، لذلك سأبقى في الوضع الحالي."},
+    "mode_already": {"en": "Already in {mode} mode.", "ar": "أنا بالفعل في هذا الوضع."},
+    "no_modes": {"en": "Mode switching isn't available.", "ar": "تبديل الأوضاع غير متاح."},
 }
 
 POWER_ACTIONS = {
@@ -200,6 +213,46 @@ def soft_normalize(text: str) -> str:
     return re.sub(r"\s+", " ", text).strip(" ,")
 
 
+# ------------------------------------------------------------------ AI mode commands
+
+MODE_WORDS = {
+    "gaming": ["gaming mode", "game mode", "gamer mode", "وضع الالعاب", "وضع الألعاب", "وضع اللعب", "وضع القيمنق",
+               "وضع القيمنج", "مود الالعاب"],
+    "normal": ["normal mode", "full mode", "regular mode", "الوضع العادي", "وضع عادي", "الوضع الطبيعي", "الوضع الكامل"],
+    "auto": ["auto mode", "automatic mode", "auto switching", "الوضع التلقائي", "وضع تلقائي", "الوضع الاوتوماتيكي",
+             "التبديل التلقائي"],
+}
+MODEL_QUESTIONS = ["which model", "what model", "current model", "what ai model", "which ai", "what mode are you",
+                   "which mode are you", "what mode is", "which mode is",
+                   "اي موديل", "أي موديل", "ايش الموديل", "وش الموديل", "اي نموذج", "أي نموذج", "ما هو النموذج",
+                   "اي وضع", "أي وضع", "وش الوضع", "ايش الوضع"]
+THINK_TRIGGERS = ["think about it", "think about this", "think carefully", "think hard", "think deeply", "think it through",
+                  "deep analysis", "analyze deeply", "analyse deeply", "in depth", "in-depth", "take your time",
+                  "step by step", "فكر فيها", "فكر في", "فكر بعمق", "فكر جيدا", "فكّر", "حلل بعمق", "تحليل عميق",
+                  "خذ وقتك", "بالتفصيل"]
+
+
+def detect_mode_command(text: str) -> str | None:
+    """'switch to gaming mode' -> 'gaming'. Only short commands (so a question *about* modes isn't a switch)."""
+    n = normalize(text)
+    if len(n.split()) > 7 or any(q in n for q in MODEL_QUESTIONS):
+        return None
+    for mode, words in MODE_WORDS.items():
+        if any(normalize(w) in n for w in words):
+            return mode
+    return None
+
+
+def is_model_question(text: str) -> bool:
+    n = normalize(text)
+    return any(normalize(q) in n for q in MODEL_QUESTIONS)
+
+
+def wants_thinking(text: str) -> bool:
+    n = normalize(text)
+    return any(normalize(t) in n for t in THINK_TRIGGERS)
+
+
 def split_browser(target: str) -> tuple[str, str]:
     """'youtube on google chrome' -> ('youtube', 'google chrome')."""
     t = soft_normalize(target)
@@ -268,8 +321,9 @@ Listener = Callable[[dict], Awaitable[None]]
 
 class Jarvis:
     def __init__(self, llm: OllamaClient, executor: Executor, telemetry: TelemetryCollector,
-                 confirm_timeout: int = 60, history_turns: int = 6, fast_commands: bool = True):
+                 confirm_timeout: int = 60, history_turns: int = 6, fast_commands: bool = True, modes=None):
         self.llm = llm
+        self.modes = modes                          # ModeManager (optional)
         self.executor = executor
         self.telemetry = telemetry
         self.confirm_timeout = confirm_timeout
@@ -277,6 +331,7 @@ class Jarvis:
         self.history: list[dict] = []
         self.history_turns = history_turns
         self.pending: dict[str, Pending] = {}
+        self._bg_tasks: set[asyncio.Task] = set()
         self._lock = asyncio.Lock()
         self._listeners: list[Listener] = []
 
@@ -349,20 +404,28 @@ class Jarvis:
             elif yn is not None:
                 return self._via(await asyncio.to_thread(self._resolve_pending, pend.id, yn, source, None, text), "rules")
 
-        # 2) instant local rules for simple commands
+        # 2) AI mode commands / "which model are you using?" (instant, no LLM)
+        mode_cmd = detect_mode_command(text)
+        if mode_cmd:
+            return self._via(await self._set_mode(text, source, lang, mode_cmd), "rules")
+        if is_model_question(text):
+            return self._via(self._model_info(text, source, lang), "rules")
+
+        # 3) instant local rules for simple commands
         if self.fast_commands:
             fast = await asyncio.to_thread(self._fast_intent, text)
             if fast:
                 log.info("Fast intent: %s target=%r browser=%r", fast["intent"], fast["target"], fast["browser"])
                 return self._via(await asyncio.to_thread(self._dispatch, text, source, lang, fast), "rules")
 
-        # 3) ask the local LLM for a structured intent
+        # 4) ask the local LLM for a structured intent ("think about it" turns thinking on for this request)
+        think = wants_thinking(text)
         t0 = time.perf_counter()
         try:
-            raw = await self.llm.chat(self._messages(text, pend), schema=INTENT_SCHEMA)
+            raw = await self.llm.chat(self._messages(text, pend, think), schema=INTENT_SCHEMA, think=think or None)
         except LLMError as exc:
             return self._via(self._response(text, source, lang, "unknown", "", msg("llm_down", lang, err=str(exc)), "error"), "llm")
-        log.info("LLM answered in %.2fs", time.perf_counter() - t0)
+        log.info("LLM (%s%s) answered in %.2fs", self.llm.model, ", thinking" if think else "", time.perf_counter() - t0)
         parsed = self._parse(raw)
         if parsed is None:
             log.warning("Unparseable LLM output: %r", raw[:300])
@@ -371,15 +434,52 @@ class Jarvis:
         self._remember(text, parsed)
         log.info("Intent: %s target=%r browser=%r conf=%.2f (%s)", parsed["intent"], parsed["target"],
                  parsed["browser"], parsed["confidence"], source)
-        return self._via(await asyncio.to_thread(self._dispatch, text, source, lang, parsed), "llm")
+        if parsed["intent"] == "set_mode":
+            mode = normalize(parsed["target"])
+            mode = next((m for m in MODE_WORDS if m in mode), None)
+            if mode:
+                return self._via(await self._set_mode(text, source, lang, mode), "llm")
+            parsed["intent"] = "unknown"
+        if parsed["intent"] == "model_info":
+            return self._via(self._model_info(text, source, lang), "llm")
+        resp = await asyncio.to_thread(self._dispatch, text, source, lang, parsed)
+        if think:
+            resp["data"]["thinking"] = True
+        return self._via(resp, "llm")
+
+    async def _set_mode(self, text: str, source: str, lang: str, mode: str) -> dict:
+        R = lambda reply, status, **kw: self._response(text, source, lang, "set_mode", mode, reply, status, **kw)
+        if not self.modes:
+            return R(msg("no_modes", lang), "failed")
+        m = self.modes
+        if mode == "auto" and not m.auto_available:
+            await m.set_mode("auto", source=source)
+            return R(msg("mode_auto_unavailable", lang, mode=m.active), "done", data={"mode": m.status()})
+        if mode == m.requested and (mode == "auto" or mode == m.active):
+            return R(msg("mode_already", lang, mode=mode), "done", data={"mode": m.status()})
+        # swap in the background: loading a model takes a few seconds, the reply shouldn't wait for it
+        task = asyncio.create_task(m.set_mode(mode, source=source))
+        self._bg_tasks.add(task)
+        task.add_done_callback(self._bg_tasks.discard)
+        return R(msg(f"mode_{mode}", lang), "done", data={"mode": {**m.status(), "requested": mode}})
+
+    def _model_info(self, text: str, source: str, lang: str) -> dict:
+        if not self.modes:
+            return self._response(text, source, lang, "model_info", "",
+                                  f"I'm using {self.llm.model}.", "done", data={"model": self.llm.model})
+        return self._response(text, source, lang, "model_info", "", self.modes.describe(lang), "done",
+                              data={"mode": self.modes.status()})
 
     @staticmethod
     def _via(resp: dict, via: str) -> dict:
         resp["via"] = via
         return resp
 
-    def _messages(self, text: str, pend: Pending | None) -> list[dict]:
+    def _messages(self, text: str, pend: Pending | None, think: bool = False) -> list[dict]:
         msgs = [{"role": "system", "content": SYSTEM_PROMPT}, *self.history]
+        if think:
+            msgs.append({"role": "system", "content": "The user asked you to think carefully. For chat answers, "
+                         "\"reply\" may be up to 8 sentences of careful, well-reasoned analysis."})
         if pend:
             msgs.append({"role": "system", "content":
                          f'You just asked the user: "{pend.question}". If the reply agrees, use intent "confirm"; '

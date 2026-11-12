@@ -285,3 +285,85 @@ async def test_speech_without_commas(make):
 def test_yes_or_no(text, expected):
     from jarvis import yes_or_no
     assert yes_or_no(text) is expected
+
+
+# ---------------------------------------------------------------- AI modes (qwen3.5 9b / 4b)
+
+@pytest.fixture
+def jm(make, tmp_path):
+    from config import Settings
+    from modes import ModeManager
+    j, llm = make()
+    s = Settings()
+    s.data_dir = tmp_path
+    s.announce_mode_changes = True
+    said = []
+    m = ModeManager(s, llm, lambda: (int(10.5 * 1024 ** 3), 12 * 1024 ** 3), tmp_path, announce=said.append)
+    j.modes = m
+    return j, llm, m, said
+
+
+async def _settle(j):
+    import asyncio
+    for t in list(j._bg_tasks):
+        await t
+    await asyncio.sleep(0)
+
+
+@pytest.mark.parametrize("text,mode,reply", [
+    ("gaming mode", "gaming", "Gaming mode on. Switching to the lightweight model."),
+    ("Switch to gaming mode please.", "gaming", "Gaming mode on. Switching to the lightweight model."),
+    ("حول على وضع الالعاب", "gaming", "تم تفعيل وضع الألعاب. سأستخدم النموذج الخفيف."),
+])
+async def test_voice_gaming_mode(jm, text, mode, reply):
+    j, llm, m, said = jm
+    await m.poll_once(initial=True)
+    r = await j.handle_text(text, source="voice")
+    assert r["reply"] == reply and r["via"] == "rules" and llm.calls == []
+    await _settle(j)
+    assert m.requested == mode and m.active == "gaming" and llm.model == "qwen3.5:4b"
+    assert said == []                     # the voice reply already announced it - no double speech
+
+
+async def test_voice_normal_and_auto_mode(jm):
+    j, llm, m, said = jm
+    await m.poll_once(initial=True)
+    await j.handle_text("gaming mode", source="voice")
+    await _settle(j)
+    r = await j.handle_text("normal mode", source="voice")
+    assert r["reply"] == "Back to normal mode. Using the full model."
+    await _settle(j)
+    assert m.active == "normal" and m.requested == "normal"
+    r = await j.handle_text("auto mode", source="voice")
+    await _settle(j)
+    assert r["reply"].startswith("Auto mode on") and m.requested == "auto"
+    assert (await j.handle_text("auto mode"))["reply"] == "Already in auto mode."
+
+
+async def test_which_model(jm):
+    j, llm, m, said = jm
+    await m.poll_once(initial=True)
+    r = await j.handle_text("Which model are you using?")
+    assert r["reply"] == "I'm using qwen3.5:9b, the full model, in normal mode, switching automatically."
+    assert llm.calls == []
+    r = await j.handle_text("وش الموديل اللي تستخدمه؟")
+    assert "qwen3.5:9b" in r["reply"] and r["lang"] == "ar"
+
+
+async def test_mode_via_llm_intent(jm):
+    j, llm, m, said = jm
+    llm.rules = {"lighter brain": {"intent": "set_mode", "target": "gaming", "browser": "", "reply": "",
+                                   "confidence": 0.9}}
+    await m.poll_once(initial=True)
+    r = await j.handle_text("please use your lighter brain for a while")
+    await _settle(j)
+    assert r["intent"] == "set_mode" and m.active == "gaming"
+
+
+async def test_thinking_only_when_asked(jm):
+    j, llm, m, said = jm
+    await j.handle_text("tell me a fun fact")
+    await j.handle_text("Think about it: should I upgrade my GPU or CPU first?")
+    await j.handle_text("فكر فيها بعمق: ايش افضل لغة برمجة؟")
+    assert llm.thinks == [None, True, True]
+    assert any("think carefully" in msg["content"] for msg in llm.calls[1] if msg["role"] == "system")

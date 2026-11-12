@@ -144,3 +144,31 @@ def test_ws_lockout(client):
             ws.send_json({"type": "auth", "pin": "0000"})
             reasons.append(ws.receive_json()["reason"])
         assert reasons == ["invalid_pin", "invalid_pin", "locked_out", "locked_out"]
+
+
+
+def test_mode_http_and_ws(client):
+    token = client.post("/api/pair", json={"pin": "4321"}).json()["token"]
+    h = {"Authorization": f"Bearer {token}"}
+    assert client.get("/api/mode").status_code == 401
+    st = client.get("/api/mode", headers=h).json()
+    assert st["requested"] in ("auto", "gaming", "normal") and "label" in st
+    st = client.post("/api/mode", json={"mode": "gaming"}, headers=h).json()
+    assert st["requested"] == "gaming" and st["mode"] == "gaming" and st["model"] == "qwen3.5:4b"
+    assert st["label"] == "qwen3.5:4b, Gaming mode (manual)"
+    assert client.post("/api/mode", json={"mode": "turbo"}, headers=h).status_code == 400
+    assert client.get("/api/status", headers=h).json()["mode"]["label"] == st["label"]
+
+    with client.websocket_connect("/ws") as ws:
+        ws.receive_json()
+        ws.send_json({"type": "auth", "token": token})
+        assert ws.receive_json()["type"] == "auth_ok"
+        assert recv_until(ws, "mode")["mode"] == "gaming"        # pushed right after connecting
+        ws.send_json({"type": "set_mode", "mode": "normal", "request_id": "m1"})
+        msgs = [recv_until(ws, "mode") for _ in range(2)]        # broadcast + direct reply
+        assert {m.get("request_id") for m in msgs} == {None, "m1"}
+        assert all(m["mode"] == "normal" and m["model"] == "qwen3.5:9b" for m in msgs)
+        ws.send_json({"type": "get_mode", "request_id": "m2"})
+        assert recv_until(ws, "mode")["request_id"] == "m2"
+        ws.send_json({"type": "chat", "text": "which model are you using", "request_id": "c"})
+        assert "qwen3.5:9b" in recv_until(ws, "jarvis_reply")["reply"]

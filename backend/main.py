@@ -16,6 +16,8 @@ WebSocket protocol (ws://<pc-ip>:8765/ws) -- all messages are JSON objects with 
   {"type":"launch","target":"C:\\\\Games\\\\x.exe","request_id":"y"}  {"type":"launch_result", ...}
   {"type":"get_telemetry"} / {"type":"get_status"}   {"type":"telemetry", ...} / {"type":"status", ...}
   {"type":"list_apps","query":"chr"}                 {"type":"apps","apps":[...]}
+  {"type":"get_mode"}                                {"type":"mode","label":"qwen3.5:4b, Gaming mode (auto)",...}
+  {"type":"set_mode","mode":"auto|gaming|normal"}    {"type":"mode", ...}   (also pushed on every change)
                                                      {"type":"telemetry", ...}   (pushed every 1.5 s)
                                                      {"type":"jarvis_event", ...} (PC voice activity)
 """
@@ -40,6 +42,7 @@ from hotkey import GlobalHotkey
 from hub import Client, Hub
 from jarvis import Jarvis
 from llm import OllamaClient
+from modes import ModeManager
 from telemetry import TelemetryCollector
 from voice import VoiceEngine
 
@@ -59,19 +62,34 @@ def setup_logging(level: str) -> None:
         logging.getLogger(noisy).setLevel(logging.WARNING)
 
 
-def print_banner(s: Settings, pin: str, ollama: dict, gpu: str | None, hotkey: GlobalHotkey | None = None) -> None:
+def print_banner(s: Settings, pin: str, ollama: dict, gpu: str | None, hotkey: GlobalHotkey | None = None,
+                 modes: ModeManager | None = None) -> None:
     ips = get_lan_ips()
     line = "=" * 60
     spaced_pin = "  ".join(pin)
-    ollama_txt = ("OK - " + s.ollama_model) if ollama["model_installed"] else (
-        f"model missing -> run: ollama pull {s.ollama_model}" if ollama["reachable"] else "NOT RUNNING")
     print(f"\n{line}\n   AI COMMAND CENTER  //  JARVIS CORE v{VERSION}\n{line}")
     print(f"   PIN ACCESS CODE :   {spaced_pin}")
     print(f"{line}")
     for ip in ips:
         print(f"   WebSocket       :   ws://{ip}:{s.port}/ws")
     print(f"   Discovery (UDP) :   port {s.discovery_port} {'ON' if s.discovery_enabled else 'OFF'}")
-    print(f"   Ollama          :   {ollama_txt}")
+    if not ollama.get("reachable"):
+        print("   Ollama          :   NOT RUNNING (the model will load when Ollama starts)")
+    else:
+        installed = set(ollama.get("models", []))
+        full = lambda m: m if ":" in m else f"{m}:latest"
+        for role, m in (("Normal model", s.model_normal), ("Gaming model", s.model_gaming),
+                        ("Fallback model", s.model_fallback)):
+            ok = full(m) in installed
+            print(f"   {role:<16}:   {m}  {'OK' if ok else 'MISSING -> run: ollama pull ' + m}")
+    if modes is not None:
+        if modes.requested == "auto" and modes.auto_available:
+            print(f"   Mode            :   AUTO (gaming below {s.vram_gaming_below_gb} GB free VRAM, "
+                  f"normal above {s.vram_normal_above_gb} GB for {s.normal_after_seconds:.0f}s)")
+        elif modes.requested == "auto":
+            print("   Mode            :   MANUAL (auto needs an NVIDIA GPU) - say 'gaming mode' / 'normal mode'")
+        else:
+            print(f"   Mode            :   {modes.requested.upper()} (manual - say 'auto mode' to switch back)")
     print(f"   GPU telemetry   :   {gpu or 'not available'}")
     print(f"   Voice           :   {'ON (say: Hey Jarvis)' if s.voice_enabled else 'OFF'}")
     if hotkey is not None:
@@ -93,6 +111,7 @@ class State:
     voice: VoiceEngine
     discovery: DiscoveryService | None = None
     hotkey: GlobalHotkey | None = None
+    modes: ModeManager
     tasks: list[asyncio.Task]
 
 
@@ -112,12 +131,20 @@ def create_app(settings: Settings | None = None, llm: OllamaClient | None = None
         st.auth = AuthManager(settings.data_dir, settings.max_pin_attempts, settings.lockout_seconds, pin=pin)
         st.telemetry = TelemetryCollector()
         st.executor = Executor(dry_run=settings.dry_run, app_index=AppIndex())
-        st.llm = llm or OllamaClient(settings.ollama_url, settings.ollama_model, settings.ollama_timeout,
-                                     settings.ollama_keep_alive)
-        st.jarvis = Jarvis(st.llm, st.executor, st.telemetry, settings.confirm_timeout,
-                           fast_commands=settings.fast_commands)
+        st.llm = llm or OllamaClient(settings.ollama_url, settings.model_normal, settings.ollama_timeout,
+                                     settings.ollama_keep_alive, settings.think_default, settings.think_timeout)
         st.hub = Hub()
-        st.voice = VoiceEngine(settings, loop, on_command=lambda text: st.jarvis.handle_text(text, "voice"))
+        st.voice = VoiceEngine(settings, loop, on_command=lambda text: st.jarvis.handle_text(text, "voice"),
+                               vram_reader=st.telemetry.vram_info)
+
+        async def push_mode(state: dict):
+            await st.hub.broadcast({"type": "mode", **state})
+        st.modes = ModeManager(settings, st.llm, st.telemetry.vram_info, settings.data_dir,
+                               announce=st.voice.announce if background else None, on_change=push_mode,
+                               own_extra_vram=lambda: st.voice.stt.vram_bytes,
+                               busy=lambda: bool(st.voice.status.get("busy")))
+        st.jarvis = Jarvis(st.llm, st.executor, st.telemetry, settings.confirm_timeout,
+                           fast_commands=settings.fast_commands, modes=st.modes)
 
         async def push_voice_events(resp: dict):
             if resp.get("source") == "voice":
@@ -139,23 +166,23 @@ def create_app(settings: Settings | None = None, llm: OllamaClient | None = None
         ollama = await st.llm.health() if background else {"reachable": False, "model_installed": False}
         if background:
             st.voice.start()
-            if ollama.get("model_installed"):
-                st.tasks.append(asyncio.create_task(warm_up()))
-            else:   # e.g. auto-started at login before Ollama finished starting
-                st.tasks.append(asyncio.create_task(wait_for_ollama()))
+            # choose + load the right model (normal/gaming) and watch VRAM; waits for Ollama if it isn't up yet
+            st.tasks.append(asyncio.create_task(st.modes.start()))
             if settings.quit_hotkey.strip() and on_quit:
                 def quit_now():
                     log.info("Quit shortcut pressed -- shutting JARVIS down")
                     on_quit()
                 st.hotkey = GlobalHotkey(settings.quit_hotkey, quit_now)
                 st.hotkey.start()
-        print_banner(settings, st.auth.pin, ollama, st.telemetry.gpu_name, st.hotkey)
+        print_banner(settings, st.auth.pin, ollama, st.telemetry.gpu_name, st.hotkey, st.modes)
         log.info("Server ready on port %d", settings.port)
         try:
             yield
         finally:
             for t in st.tasks:
                 t.cancel()
+            if background:
+                await st.modes.stop(unload=settings.unload_on_exit)
             st.voice.stop()
             if st.hotkey:
                 st.hotkey.stop()
@@ -172,27 +199,6 @@ def create_app(settings: Settings | None = None, llm: OllamaClient | None = None
                 log.debug("telemetry loop: %s", exc)
             await asyncio.sleep(settings.telemetry_interval)
 
-    async def wait_for_ollama(timeout: float = 300):
-        """Poll Ollama after startup; warm the model as soon as it becomes available."""
-        loop = asyncio.get_running_loop()
-        end = loop.time() + timeout
-        while loop.time() < end:
-            await asyncio.sleep(5)
-            h = await st.llm.health()
-            if h["model_installed"]:
-                log.info("Ollama is now available")
-                await warm_up()
-                return
-        log.warning("Ollama still not available after %ds -- JARVIS will keep retrying on each command", timeout)
-
-    async def warm_up():
-        """Load the model into VRAM now so the first real command is fast."""
-        try:
-            await st.llm.chat([{"role": "user", "content": "hi"}])
-            log.info("Ollama model '%s' loaded and warm", settings.ollama_model)
-        except Exception as exc:
-            log.warning("Ollama warm-up failed: %s", exc)
-
     app = FastAPI(title="AI Command Center - JARVIS Core", version=VERSION, lifespan=lifespan)
     app.state.core = st
     app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
@@ -204,6 +210,7 @@ def create_app(settings: Settings | None = None, llm: OllamaClient | None = None
             "service": SERVICE_ID, "version": VERSION, "server_name": settings.server_name,
             "lan_ips": get_lan_ips(), "port": settings.port, "dry_run": settings.dry_run,
             "ollama": await st.llm.health(),
+            "mode": st.modes.status(),
             "gpu": {"available": st.telemetry.gpu_available, "name": st.telemetry.gpu_name,
                     "error": st.telemetry.gpu_error},
             "voice": st.voice.status,
@@ -271,6 +278,19 @@ def create_app(settings: Settings | None = None, llm: OllamaClient | None = None
         b = await request.json()
         res = await asyncio.to_thread(st.executor.launch_target, str(b.get("target", "")))
         return {"ok": res.ok, "message": res.message, "data": res.data}
+
+    @app.get("/api/mode")
+    async def get_mode(_=Depends(require_token)):
+        return st.modes.status()
+
+    @app.post("/api/mode")
+    async def set_mode(request: Request, _=Depends(require_token)):
+        """Body: {"mode": "auto" | "gaming" | "normal"}. Manual choices stick until "auto" is set."""
+        b = await request.json()
+        try:
+            return await st.modes.set_mode(str(b.get("mode", "")), source="tablet")
+        except ValueError as exc:
+            raise HTTPException(400, str(exc))
 
     @app.post("/api/voice")
     async def voice_upload(request: Request, _=Depends(require_token)):
@@ -347,6 +367,7 @@ def create_app(settings: Settings | None = None, llm: OllamaClient | None = None
         # ---- authenticated session
         st.hub.add(client)
         await st.hub.send(client, {"type": "telemetry", **st.telemetry.snapshot()})
+        await st.hub.send(client, {"type": "mode", **st.modes.status()})
         pending_tasks: set[asyncio.Task] = set()
 
         def spawn(coro):
@@ -361,6 +382,13 @@ def create_app(settings: Settings | None = None, llm: OllamaClient | None = None
         async def do_confirm(pid: str, approve: bool, choice, rid):
             resp = await st.jarvis.confirm(pid, approve, "tablet", choice)
             await st.hub.send(client, {"type": "jarvis_reply", "request_id": rid, **resp})
+
+        async def do_set_mode(mode: str, rid):
+            try:
+                state = await st.modes.set_mode(mode, source="tablet")
+                await st.hub.send(client, {"type": "mode", "request_id": rid, **state})
+            except ValueError as exc:
+                await st.hub.send(client, {"type": "error", "request_id": rid, "error": str(exc)})
 
         async def do_launch(target: str, rid):
             res = await asyncio.to_thread(st.executor.launch_target, target)
@@ -386,6 +414,10 @@ def create_app(settings: Settings | None = None, llm: OllamaClient | None = None
                     await st.hub.send(client, {"type": "telemetry", "request_id": rid, **st.telemetry.snapshot()})
                 elif t == "get_status":
                     await st.hub.send(client, {"type": "status", "request_id": rid, **(await status_payload())})
+                elif t == "get_mode":
+                    await st.hub.send(client, {"type": "mode", "request_id": rid, **st.modes.status()})
+                elif t == "set_mode":
+                    spawn(do_set_mode(str(msg.get("mode", "")), rid))
                 elif t == "list_apps":
                     await st.hub.send(client, {"type": "apps", "request_id": rid,
                                                "apps": st.executor.apps.search(str(msg.get("query", "")))})
