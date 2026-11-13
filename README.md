@@ -24,6 +24,8 @@ backend/
 ├── llm.py           Ollama client (switchable model, thinking on/off, load/unload)
 ├── modes.py         Auto mode switching: Normal (qwen3.5:9b) <-> Gaming (qwen3.5:4b)
 ├── games.py         Detects a running game by its program (Steam/Epic/Riot/... game folders)
+├── memory.py        Long-term memory: facts, conversation log, routines (local SQLite file)
+├── screen.py        Screenshot for "what's on my screen?" (sent only to the local model)
 ├── executor.py      Windows actions: dynamic Start Menu app matching, URLs, media keys, power
 ├── voice.py         "Hey Jarvis" wake word → Whisper speech-to-text → JARVIS → edge-tts voice
 ├── hub.py           Connected-tablet manager
@@ -220,6 +222,37 @@ mode, the log names it (`Game detected: …`), so add it to `GAME_IGNORE`. For V
 
 ---
 
+## Search, play, and your screen
+
+- **"Play bad romance by Lady Gaga"** opens the **first YouTube video** directly. Add "on YouTube Music" or
+  "on Spotify" to use those instead (Spotify searches inside the app if it's installed). `PLAY_SITE` sets the default.
+- **"Search for a cat video"** searches **YouTube**, because videos, songs, trailers and tutorials go to YouTube. Anything else goes to Google.
+  "Search … on Amazon / GitHub / Reddit / Steam / Maps / Images" works too.
+- **"What's on my screen?" / "What does this error say?"** makes JARVIS take a screenshot and ask the vision model
+  (qwen3.5 can read images). The screenshot is **only sent to your local Ollama** and is never saved. It needs Pillow,
+  so run `setup.bat` once after updating.
+
+---
+
+## Memory & routines
+
+Everything stays on your PC in `backend/data/memory.db`, which is never uploaded to GitHub.
+
+| Say | What happens |
+|---|---|
+| "Remember that my games are on the D drive" | Saved. Relevant memories are given to the AI with every question. |
+| "What do you remember?" / "What do you remember about my games?" | Lists them. |
+| "Forget my birthday" / "Forget that" | Deletes that memory (or the last one). |
+| "Forget everything" | Asks first, then deletes all memories **and** the conversation history (routines are kept). |
+| "What did we talk about yesterday?" | Every exchange is logged, so JARVIS keeps context after restarts and can look back. |
+| "When I say *gaming time*, open Steam and Discord, gaming mode, and volume up" | Creates a **routine**. |
+| "Gaming time" (or "run gaming time") | Runs every step. Risky steps still ask "Are you sure?". |
+| "What routines do I have?" / "Delete the gaming time routine" | Lists / removes routines. |
+
+Settings: `MEMORY_ENABLED`, `MEMORY_MAX_FACTS`.
+
+---
+
 ## WebSocket protocol (for the tablet app)
 
 Connect to `ws://<pc-ip>:8765/ws`. The first message must be `auth`:
@@ -233,6 +266,7 @@ Connect to `ws://<pc-ip>:8765/ws`. The first message must be `auth`:
 | `{"type":"launch","target":"C:\\Games\\game.exe"}` | `{"type":"launch_result","ok":true,…}` |
 | `{"type":"list_apps","query":"chr"}` | `{"type":"apps","apps":[…]}` |
 | `{"type":"get_status"}` / `{"type":"ping"}` | `status` / `pong` |
+| `{"type":"get_memory"}` | `{"type":"memory","facts":[…],"routines":[…],"conversations":n}` |
 | `{"type":"get_mode"}` | `{"type":"mode","label":"qwen3.5:4b, Gaming mode (auto)","mode":"gaming","requested":"auto",…}` |
 | `{"type":"set_mode","mode":"auto"\|"gaming"\|"normal"}` | `mode` (also **pushed to every tablet on each change**, and once right after connecting) |
 | | `{"type":"telemetry","cpu_percent":…,"ram_percent":…,"gpu_percent":…,"vram_percent":…,"clock":…,"system_uptime":…}` every 1.5 s |
@@ -242,7 +276,9 @@ Connect to `ws://<pc-ip>:8765/ws`. The first message must be `auth`:
 `needs_clarification`, `cancelled`, `failed`, `error`.
 
 **HTTP (header `Authorization: Bearer <token>`):** `POST /api/pair`, `GET /api/status`, `GET /api/telemetry`,
-`GET /api/apps?q=`, `GET /api/mode`, `POST /api/mode` (`{"mode":"gaming"}`), `POST /api/chat`, `POST /api/confirm`, `POST /api/launch`,
+`GET /api/apps?q=`, `GET /api/mode`, `POST /api/mode` (`{"mode":"gaming"}`),
+`GET /api/memory` (facts + routines), `POST /api/memory/facts` (`{"text":…}`), `DELETE /api/memory/facts/{id}`,
+`POST /api/routines` (`{"trigger":…,"steps":[…]}`), `DELETE /api/routines/{id}`, `POST /api/chat`, `POST /api/confirm`, `POST /api/launch`,
 `POST /api/voice` (raw push-to-talk audio such as webm/ogg/wav, returns the transcript + JARVIS reply), `GET /api/tts?text=` (mp3).
 Public: `GET /api/health`, `GET /api/discover`.
 

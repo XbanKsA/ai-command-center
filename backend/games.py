@@ -34,8 +34,27 @@ GAME_FOLDERS = [
     r"\rockstar games",
 ]
 
+# folders INSIDE game libraries that hold launchers / background services, not games
+IGNORE_FOLDERS = [
+    r"\epic games\launcher",
+    r"\epic games\epic online services",
+    r"\epic games\epicgameslauncher",
+    r"\electronic arts\ea desktop",
+    r"\ea games\ea desktop",
+    r"\riot games\riot client",
+    r"\riot games\riot vanguard",
+    r"\steamapps\common\steamworks shared",
+    r"\steamapps\common\steamvr",
+    r"\steamapps\common\steam controller configs",
+    r"\steamapps\common\wallpaper_engine",
+    r"\ubisoft game launcher\games\..",       # never matches a game; launcher itself is outside \games
+]
+
 # launchers, overlays, helpers and always-on tools that live in game folders but aren't games
 DEFAULT_IGNORE = {
+    "epiconlineservices.exe", "epiconlineserviceshost.exe", "eosoverlayrenderer-win64-shipping.exe",
+    "eosoverlayrenderer-win32-shipping.exe", "unrealcefsubprocess.exe",
+    "eacefsubprocess.exe", "eaconnect_microsoft.exe", "ealauncher.exe", "eadm.exe",
     "steam.exe", "steamwebhelper.exe", "steamservice.exe", "gameoverlayui.exe", "steamerrorreporter.exe",
     "epicgameslauncher.exe", "epicwebhelper.exe", "epiconlineservicesuserhelper.exe",
     "riotclientservices.exe", "riotclientux.exe", "riotclientuxrender.exe", "riotclientcrashhandler.exe",
@@ -91,6 +110,8 @@ class GameDetector:
         if name in self.extra:
             return True
         path = (exe_path or "").replace("/", "\\").lower()
+        if any(folder + "\\" in path for folder in IGNORE_FOLDERS):
+            return False
         return any(folder + "\\" in path for folder in GAME_FOLDERS)
 
     def scan(self) -> Game | None:

@@ -172,3 +172,22 @@ def test_mode_http_and_ws(client):
         assert recv_until(ws, "mode")["request_id"] == "m2"
         ws.send_json({"type": "chat", "text": "which model are you using", "request_id": "c"})
         assert "qwen3.5:9b" in recv_until(ws, "jarvis_reply")["reply"]
+
+
+
+def test_memory_api(client):
+    token = client.post("/api/pair", json={"pin": "4321"}).json()["token"]
+    h = {"Authorization": f"Bearer {token}"}
+    assert client.get("/api/memory").status_code == 401
+    fid = client.post("/api/memory/facts", json={"text": "My games are on D"}, headers=h).json()["id"]
+    rid = client.post("/api/routines", json={"trigger": "gaming time", "steps": ["open steam"]}, headers=h).json()["id"]
+    m = client.get("/api/memory", headers=h).json()
+    assert m["facts"][0]["text"] == "My games are on D." and m["routines"][0]["steps"] == ["open steam"]
+    r = client.post("/api/chat", json={"text": "gaming time"}, headers=h).json()
+    assert r["via"] == "routine" and r["status"] == "done"
+    assert client.delete(f"/api/memory/facts/{fid}", headers=h).status_code == 200
+    assert client.delete(f"/api/routines/{rid}", headers=h).status_code == 200
+    assert client.delete(f"/api/routines/{rid}", headers=h).status_code == 404
+    assert client.post("/api/routines", json={"trigger": "x", "steps": []}, headers=h).status_code == 400
+    st = client.get("/api/status", headers=h).json()
+    assert st["memory"]["facts"] == 0 and st["memory"]["conversations"] >= 1

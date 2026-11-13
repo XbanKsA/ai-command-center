@@ -122,6 +122,14 @@ class Settings:
     # global keyboard shortcut that shuts JARVIS down (blank = disabled)
     quit_hotkey: str = field(default_factory=lambda: _get("QUIT_HOTKEY", "ctrl+shift+q"))
 
+    # --- Memory (stays on this PC: data/memory.db) ---
+    memory_enabled: bool = field(default_factory=lambda: _get_bool("MEMORY_ENABLED", True))
+    memory_max_facts: int = field(default_factory=lambda: _get_int("MEMORY_MAX_FACTS", 20))  # facts sent per request
+
+    # --- Media & screen ---
+    play_site: str = field(default_factory=lambda: _get("PLAY_SITE", "youtube"))  # youtube | youtube music | spotify
+    screen_max_side: int = field(default_factory=lambda: _get_int("SCREEN_MAX_SIDE", 1280))
+
     # --- Voice ---
     voice_enabled: bool = field(default_factory=lambda: _get_bool("VOICE_ENABLED", True))
     wake_word_model: str = field(default_factory=lambda: _get("WAKE_WORD_MODEL", "hey_jarvis"))

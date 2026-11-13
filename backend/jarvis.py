@@ -23,8 +23,11 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Awaitable, Callable
 
-from executor import ActionResult, AppEntry, Executor, normalize, resolve_browser, resolve_site
+from executor import (SEARCH_SITES, ActionResult, AppEntry, Executor, normalize, resolve_browser,
+                      resolve_search_site, resolve_site)
 from llm import LLMError, OllamaClient
+from memory import MemoryStore, time_window
+from screen import ScreenError, capture_screen, clean_for_speech, is_screen_question
 from telemetry import TelemetryCollector
 
 log = logging.getLogger("jarvis")
@@ -32,7 +35,8 @@ log = logging.getLogger("jarvis")
 INTENTS = [
     "chat", "open_app", "close_app", "open_url", "web_search", "media_control", "system_stats",
     "lock_pc", "sleep_pc", "shutdown_pc", "restart_pc", "cancel_shutdown", "confirm", "deny",
-    "set_mode", "model_info", "unknown",
+    "set_mode", "model_info", "play_media", "screen",
+    "remember", "recall", "forget", "create_routine", "list_routines", "delete_routine", "unknown",
 ]
 MEDIA_TARGETS = ["play_pause", "next", "previous", "stop", "mute", "volume_up", "volume_down"]
 
@@ -42,14 +46,16 @@ INTENT_SCHEMA = {
         "intent": {"type": "string", "enum": INTENTS},
         "target": {"type": "string"},
         "browser": {"type": "string"},
+        "site": {"type": "string"},
+        "steps": {"type": "array", "items": {"type": "string"}},
         "reply": {"type": "string"},
         "confidence": {"type": "number"},
     },
-    "required": ["intent", "target", "browser", "reply", "confidence"],
+    "required": ["intent", "target", "browser", "site", "steps", "reply", "confidence"],
 }
 
 SYSTEM_PROMPT = f"""You are JARVIS, a concise, witty, helpful AI assistant that controls a Windows PC.
-Convert every user message into ONE JSON object: {{"intent", "target", "browser", "reply", "confidence"}}.
+Convert every user message into ONE JSON object: {{"intent", "target", "browser", "site", "steps", "reply", "confidence"}}.
 
 Intents:
 - chat: questions/conversation. "reply" = your full answer (max 3 short sentences, it will be spoken aloud).
@@ -57,7 +63,20 @@ Intents:
 - open_url: open websites (youtube, instagram, whatsapp web, any domain). target = site name(s) or domain(s),
   comma-separated if several. If the user names a browser ("on chrome", "in edge"), put it in "browser".
 - close_app: close/quit/kill a program. target = app name.
-- web_search: search the internet. target = the search query. browser = browser if named.
+- web_search: search for something. target = the search query (WITHOUT words like "search for", "a video of").
+  site = where to search: "youtube" for videos, songs, music, trailers, tutorials, clips; "youtube music",
+  "spotify", "amazon", "github", "reddit", "maps", "images" when asked; otherwise "google".
+- play_media: play a song / video / music. target = what to play (e.g. "bad romance lady gaga").
+  site = "youtube" (default), "youtube music" or "spotify" if the user says so.
+- screen: the user asks about what is on their screen ("what's on my screen", "read this error", "what am I looking at").
+  target = their question.
+- remember: the user asks you to remember something. target = the fact, rewritten clearly (e.g. "My games are on D:\\Games").
+- recall: the user asks what you remember / know about them. target = topic or "".
+- forget: the user asks you to forget something. target = what to forget ("everything" to forget all).
+- create_routine: "when I say X, do A, B, C". target = the trigger phrase X; steps = each action as a short command,
+  e.g. ["open steam", "open discord", "gaming mode", "volume up"].
+- list_routines: the user asks which routines / shortcuts exist.
+- delete_routine: target = the routine's trigger phrase.
 - media_control: target is one of {MEDIA_TARGETS}.
 - system_stats: user asks about CPU / GPU / RAM / performance / temperature.
 - lock_pc, sleep_pc, shutdown_pc, restart_pc, cancel_shutdown: target = "".
@@ -68,22 +87,30 @@ Intents:
 
 Rules:
 - "browser" is "" unless the user explicitly names a browser. Never put the browser in "target".
+- "site" is "" and "steps" is [] unless the intent uses them.
+- Facts listed under "What you remember about the user" are true; use them when relevant.
 - "reply" for actions = a very short spoken acknowledgement.
 - Always write "reply" in the SAME language the user used (Arabic -> Arabic, English -> English).
 - confidence = 0..1, how sure you are about the intent and target. Never invent targets.
 - Only output the JSON object.
 
 Examples:
-User: open chrome -> {{"intent":"open_app","target":"chrome","browser":"","reply":"Opening Chrome.","confidence":0.97}}
-User: open youtube, instagram and whatsapp on google chrome -> {{"intent":"open_url","target":"youtube, instagram, whatsapp","browser":"chrome","reply":"Opening them in Chrome.","confidence":0.95}}
-User: افتح يوتيوب في كروم -> {{"intent":"open_url","target":"youtube","browser":"chrome","reply":"جاري فتح يوتيوب.","confidence":0.95}}
-User: افتح سبوتيفاي -> {{"intent":"open_app","target":"سبوتيفاي","browser":"","reply":"جاري فتح سبوتيفاي.","confidence":0.95}}
-User: search for the weather in riyadh -> {{"intent":"web_search","target":"weather in riyadh","browser":"","reply":"Searching.","confidence":0.95}}
-User: turn the volume up -> {{"intent":"media_control","target":"volume_up","browser":"","reply":"Volume up.","confidence":0.95}}
-User: how hot is my gpu -> {{"intent":"system_stats","target":"","browser":"","reply":"Checking.","confidence":0.9}}
-User: shut down the computer -> {{"intent":"shutdown_pc","target":"","browser":"","reply":"Shutting down.","confidence":0.95}}
-User: who wrote hamlet -> {{"intent":"chat","target":"","browser":"","reply":"William Shakespeare wrote Hamlet.","confidence":0.99}}
-User: do the thing -> {{"intent":"unknown","target":"","browser":"","reply":"Which thing would you like me to do?","confidence":0.2}}
+User: open chrome -> {{"intent":"open_app","target":"chrome","browser":"","site":"","steps":[],"reply":"Opening Chrome.","confidence":0.97}}
+User: open youtube, instagram and whatsapp on google chrome -> {{"intent":"open_url","target":"youtube, instagram, whatsapp","browser":"chrome","site":"","steps":[],"reply":"Opening them in Chrome.","confidence":0.95}}
+User: افتح يوتيوب في كروم -> {{"intent":"open_url","target":"youtube","browser":"chrome","site":"","steps":[],"reply":"جاري فتح يوتيوب.","confidence":0.95}}
+User: افتح سبوتيفاي -> {{"intent":"open_app","target":"سبوتيفاي","browser":"","site":"","steps":[],"reply":"جاري فتح سبوتيفاي.","confidence":0.95}}
+User: search for the weather in riyadh -> {{"intent":"web_search","target":"weather in riyadh","browser":"","site":"google","steps":[],"reply":"Searching.","confidence":0.95}}
+User: search for bad romance by lady gaga -> {{"intent":"web_search","target":"bad romance lady gaga","browser":"","site":"youtube","steps":[],"reply":"Searching YouTube.","confidence":0.9}}
+User: search for a cat video -> {{"intent":"web_search","target":"cat","browser":"","site":"youtube","steps":[],"reply":"Searching YouTube for cat videos.","confidence":0.9}}
+User: play shape of you on spotify -> {{"intent":"play_media","target":"shape of you","browser":"","site":"spotify","steps":[],"reply":"Playing it on Spotify.","confidence":0.95}}
+User: can you see what's on my screen -> {{"intent":"screen","target":"what's on my screen","browser":"","site":"","steps":[],"reply":"Let me look.","confidence":0.95}}
+User: remember that my games are on the D drive -> {{"intent":"remember","target":"My games are on the D drive","browser":"","site":"","steps":[],"reply":"Got it.","confidence":0.95}}
+User: when I say gaming time open steam and discord and switch to gaming mode -> {{"intent":"create_routine","target":"gaming time","browser":"","site":"","steps":["open steam","open discord","gaming mode"],"reply":"Routine saved.","confidence":0.95}}
+User: turn the volume up -> {{"intent":"media_control","target":"volume_up","browser":"","site":"","steps":[],"reply":"Volume up.","confidence":0.95}}
+User: how hot is my gpu -> {{"intent":"system_stats","target":"","browser":"","site":"","steps":[],"reply":"Checking.","confidence":0.9}}
+User: shut down the computer -> {{"intent":"shutdown_pc","target":"","browser":"","site":"","steps":[],"reply":"Shutting down.","confidence":0.95}}
+User: who wrote hamlet -> {{"intent":"chat","target":"","browser":"","site":"","steps":[],"reply":"William Shakespeare wrote Hamlet.","confidence":0.99}}
+User: do the thing -> {{"intent":"unknown","target":"","browser":"","site":"","steps":[],"reply":"Which thing would you like me to do?","confidence":0.2}}
 """
 
 # ------------------------------------------------------------------ language helpers
@@ -113,6 +140,29 @@ MESSAGES = {
     "unclear": {"en": "Sorry, I didn't catch that. Could you rephrase?", "ar": "عذراً، لم أفهم. هل يمكنك إعادة الصياغة؟"},
     "bad_url": {"en": "That doesn't look like a valid website.", "ar": "هذا لا يبدو كموقع صحيح."},
     "yes_or_no": {"en": "Please answer yes or no.", "ar": "من فضلك أجب بنعم أو لا."},
+    "searching": {"en": "Searching {site} for {q}.", "ar": "جاري البحث في {site} عن {q}."},
+    "playing": {"en": "Playing {q} on {site}.", "ar": "جاري تشغيل {q} على {site}."},
+    "remembered": {"en": "Got it, I'll remember that.", "ar": "تم، سأتذكر ذلك."},
+    "remember_updated": {"en": "Got it, I've updated that memory.", "ar": "تم تحديث الذاكرة."},
+    "nothing_remembered": {"en": "I don't have anything saved yet. Say 'remember that' followed by something.",
+                           "ar": "لا يوجد شيء محفوظ بعد."},
+    "no_memory_about": {"en": "I don't have anything saved about {q}.", "ar": "لا يوجد شيء محفوظ عن {q}."},
+    "forgot": {"en": "Okay, I forgot: {fact}", "ar": "تم نسيان: {fact}"},
+    "confirm_forget_all": {"en": "Should I forget all {n} things you told me to remember, and our conversation history?",
+                           "ar": "هل أنسى كل ما طلبت مني تذكره وسجل محادثاتنا؟"},
+    "forgot_all": {"en": "Done. I've forgotten everything. Your routines are still saved.",
+                   "ar": "تم نسيان كل شيء. الروتينات ما زالت محفوظة."},
+    "routine_saved": {"en": "Got it. When you say {trigger}, I'll {steps}.", "ar": "تم. عندما تقول {trigger} سأقوم بـ: {steps}."},
+    "routine_updated": {"en": "Updated. When you say {trigger}, I'll {steps}.", "ar": "تم التحديث. عندما تقول {trigger} سأقوم بـ: {steps}."},
+    "routine_need_steps": {"en": "What should the {trigger} routine do?", "ar": "ماذا يجب أن يفعل روتين {trigger}؟"},
+    "routine_running": {"en": "Running {trigger}.", "ar": "جاري تنفيذ {trigger}."},
+    "no_routines": {"en": "You don't have any routines yet. Try: when I say gaming time, open Steam and Discord.",
+                    "ar": "لا توجد روتينات بعد."},
+    "routines_list": {"en": "Your routines: {list}.", "ar": "الروتينات: {list}."},
+    "routine_deleted": {"en": "Deleted the {trigger} routine.", "ar": "تم حذف روتين {trigger}."},
+    "routine_not_found": {"en": "I couldn't find a routine called {trigger}.", "ar": "لم أجد روتيناً باسم {trigger}."},
+    "no_memory": {"en": "Memory is turned off.", "ar": "الذاكرة متوقفة."},
+    "no_vision": {"en": "The current model, {model}, can't see images.", "ar": "النموذج الحالي {model} لا يستطيع رؤية الصور."},
     "mode_gaming": {"en": "Gaming mode on. Switching to the lightweight model.",
                     "ar": "تم تفعيل وضع الألعاب. سأستخدم النموذج الخفيف."},
     "mode_normal": {"en": "Back to normal mode. Using the full model.",
@@ -153,7 +203,8 @@ YES_PHRASES = {"yes", "yeah", "yep", "yup", "ya", "yes please", "sure", "confirm
 YES_FIRST = {"yes", "yeah", "yep", "yup", "ya", "sure", "ok", "okay", "confirm", "absolutely", "definitely",
              "نعم", "اي", "ايه", "إي", "أكيد", "اكيد", "تمام", "اوكي", "أوكي", "يب", "موافق", "طيب"}
 NO_PHRASES = {"no", "nope", "nah", "cancel", "stop", "never mind", "nevermind", "dont", "don t", "abort",
-              "no thanks", "لا", "الغ", "إلغاء", "الغاء", "وقف", "لا تسوي", "خلاص", "لا شكرا", "لاء"}
+              "no thanks", "forget it", "skip it", "لا", "الغ", "إلغاء", "الغاء", "وقف", "لا تسوي", "خلاص",
+              "لا شكرا", "لاء"}
 NO_FIRST = {"no", "nope", "nah", "cancel", "dont", "don", "stop", "abort", "لا", "الغ", "إلغاء", "الغاء", "لاء"}
 NEGATIONS = {"not", "dont", "don", "no", "never", "لا", "ما", "مو"}
 
@@ -254,6 +305,37 @@ def wants_thinking(text: str) -> bool:
     return any(normalize(t) in n for t in THINK_TRIGGERS)
 
 
+PLAY_RE = re.compile(_WAKE_PREFIX + _POLITE + r"(?:play|put on)\s+(?P<t>.+?)(?:\s+(?:on|in|using)\s+"
+                     r"(?P<site>youtube music|yt music|youtube|you tube|spotify))?(?:\s+please)?$")
+SEARCH_RE = re.compile(_WAKE_PREFIX + _POLITE + r"(?:search|look up|find|google)\s+(?:for\s+)?(?P<t>.+?)"
+                       r"(?:\s+(?:on|in)\s+(?P<site>youtube music|yt music|youtube|you tube|spotify|google|amazon|github|"
+                       r"reddit|twitch|wikipedia|steam|maps|google maps|images|google images|twitter|x))?(?:\s+please)?$")
+_VIDEO_WORDS = re.compile(r"\b(videos?|songs?|music|trailers?|clips?|music video|tutorials?|lyrics)\b")
+
+
+# ------------------------------------------------------------------ memory commands
+
+REMEMBER_RE = re.compile(r"^(?:(?:hey\s+)?jarvis\s+)?(?:please\s+)?(?:remember|don'?t forget|keep in mind|note)"
+                         r"\s+(?:that\s+)?(?P<t>.{3,})$", re.I)
+FORGET_RE = re.compile(r"^(?:(?:hey\s+)?jarvis\s+)?(?:please\s+)?forget\s+(?:about\s+)?(?P<t>.+)$", re.I)
+RECALL_RE = re.compile(r"^(?:what do you remember|what do you know about me|what have you (?:remembered|saved)|"
+                       r"(?:list|show|tell me)(?: me)? (?:your|my|all) memories|what are my memories|"
+                       r"what do you remember about (?P<t>.+)|what did i tell you about (?P<t2>.+))$", re.I)
+LIST_ROUTINES = {"list my routines", "what routines do i have", "what are my routines", "show my routines",
+                 "my routines", "list routines", "what routines do you know", "which routines do i have"}
+DELETE_ROUTINE_RE = re.compile(r"^(?:please\s+)?(?:delete|remove)\s+(?:the\s+|my\s+)?(?:routine\s+(?P<a>.+)|"
+                               r"(?P<b>.+?)\s+routine)$", re.I)
+FORGET_ALL = {"everything", "all", "all memories", "all of it", "everything you know", "everything about me",
+              "all my memories", "everything i told you"}
+FORGET_LAST = {"that", "the last thing", "what i just said", "the last one", "the last memory"}
+PAST_TALK_RE = re.compile(r"\b(we talk(?:ed)?|we (?:were )?discuss(?:ed|ing)?|did i (?:say|ask|tell)|last time|yesterday|"
+                          r"earlier today|i asked you|you told me|our (?:last )?conversation|we spoke)\b", re.I)
+
+
+def _clean_sentence(text: str) -> str:
+    return re.sub(r"\s+", " ", (text or "").strip().strip(".!?")).strip()
+
+
 def split_browser(target: str) -> tuple[str, str]:
     """'youtube on google chrome' -> ('youtube', 'google chrome')."""
     t = soft_normalize(target)
@@ -322,9 +404,14 @@ Listener = Callable[[dict], Awaitable[None]]
 
 class Jarvis:
     def __init__(self, llm: OllamaClient, executor: Executor, telemetry: TelemetryCollector,
-                 confirm_timeout: int = 60, history_turns: int = 6, fast_commands: bool = True, modes=None):
+                 confirm_timeout: int = 60, history_turns: int = 6, fast_commands: bool = True, modes=None,
+                 memory: MemoryStore | None = None, screen_max_side: int = 1280, max_memory_facts: int = 20):
         self.llm = llm
         self.modes = modes                          # ModeManager (optional)
+        self.memory = memory                        # MemoryStore (optional)
+        self.screen_max_side = screen_max_side
+        self.max_memory_facts = max_memory_facts
+        self._in_routine = False
         self.executor = executor
         self.telemetry = telemetry
         self.confirm_timeout = confirm_timeout
@@ -335,6 +422,12 @@ class Jarvis:
         self._bg_tasks: set[asyncio.Task] = set()
         self._lock = asyncio.Lock()
         self._listeners: list[Listener] = []
+        if self.memory:                             # pick up the conversation where it left off
+            for ex in self.memory.recent_exchanges(history_turns):
+                self.history += [{"role": "user", "content": ex["user_text"]},
+                                 {"role": "assistant", "content": json.dumps(
+                                     {"intent": ex["intent"] or "chat", "target": "", "browser": "", "site": "",
+                                      "steps": [], "reply": ex["reply"], "confidence": 1.0}, ensure_ascii=False)}]
 
     # ---------------- public API
     def add_listener(self, fn: Listener) -> None:
@@ -352,6 +445,11 @@ class Jarvis:
             else:
                 resp = await self._handle(text, source)
         resp["elapsed_ms"] = int((time.perf_counter() - t0) * 1000)
+        if self.memory and text:
+            try:
+                self.memory.log_exchange(text, resp.get("reply", ""), resp.get("intent", ""), source)
+            except Exception as exc:
+                log.debug("could not log exchange: %s", exc)
         log.info("Handled in %.2fs via %s -> %s", resp["elapsed_ms"] / 1000, resp.get("via", "?"), resp["status"])
         await self._emit(resp)
         return resp
@@ -405,21 +503,37 @@ class Jarvis:
             elif yn is not None:
                 return self._via(await asyncio.to_thread(self._resolve_pending, pend.id, yn, source, None, text), "rules")
 
-        # 2) AI mode commands / "which model are you using?" (instant, no LLM)
+        # 2) your routines ("gaming time" -> open Steam, open Discord, gaming mode ...)
+        if self.memory and not self._in_routine:
+            routine = self.memory.match_routine(text)
+            if routine:
+                return self._via(await self._run_routine(routine, text, source, lang), "routine")
+
+        # 3) memory commands: remember / forget / what do you remember / routines (instant, no LLM)
+        if self.memory:
+            mem = await self._memory_rules(text, source, lang)
+            if mem:
+                return self._via(mem, "rules")
+
+        # 4) "what's on my screen?" -> screenshot + vision model
+        if is_screen_question(text):
+            return self._via(await self._look_at_screen(text, source, lang, text, wants_thinking(text)), "vision")
+
+        # 5) AI mode commands / "which model are you using?" (instant, no LLM)
         mode_cmd = detect_mode_command(text)
         if mode_cmd:
             return self._via(await self._set_mode(text, source, lang, mode_cmd), "rules")
         if is_model_question(text):
             return self._via(self._model_info(text, source, lang), "rules")
 
-        # 3) instant local rules for simple commands
+        # 6) instant local rules for simple commands
         if self.fast_commands:
             fast = await asyncio.to_thread(self._fast_intent, text)
             if fast:
                 log.info("Fast intent: %s target=%r browser=%r", fast["intent"], fast["target"], fast["browser"])
                 return self._via(await asyncio.to_thread(self._dispatch, text, source, lang, fast), "rules")
 
-        # 4) ask the local LLM for a structured intent ("think about it" turns thinking on for this request)
+        # 7) ask the local LLM for a structured intent ("think about it" turns thinking on for this request)
         think = wants_thinking(text)
         t0 = time.perf_counter()
         try:
@@ -443,10 +557,154 @@ class Jarvis:
             parsed["intent"] = "unknown"
         if parsed["intent"] == "model_info":
             return self._via(self._model_info(text, source, lang), "llm")
+        if parsed["intent"] == "screen":
+            return self._via(await self._look_at_screen(text, source, lang, parsed["target"] or text, think), "vision")
+        if parsed["intent"] in ("remember", "recall", "forget", "create_routine", "list_routines", "delete_routine"):
+            return self._via(await self._memory_intent(text, source, lang, parsed), "llm")
         resp = await asyncio.to_thread(self._dispatch, text, source, lang, parsed)
         if think:
             resp["data"]["thinking"] = True
         return self._via(resp, "llm")
+
+    # ================================================================ screen
+    async def _look_at_screen(self, text: str, source: str, lang: str, question: str, think: bool) -> dict:
+        R = lambda reply, status, **kw: self._response(text, source, lang, "screen", "", reply, status, **kw)
+        caps = await self.llm.capabilities(self.llm.model)
+        if caps and "vision" not in caps:
+            return R(msg("no_vision", lang, model=self.llm.model), "failed")
+        try:
+            image = await asyncio.to_thread(capture_screen, self.screen_max_side)
+        except ScreenError as exc:
+            return R(str(exc), "failed")
+        messages = [
+            {"role": "system", "content": "You are JARVIS, a helpful assistant. You are looking at a screenshot of the "
+             "user's Windows PC screen. Answer their question about it directly and concisely (2-4 short sentences, "
+             "it will be spoken aloud). Read exact text (errors, titles, numbers) when relevant. No markdown."},
+            *self._memory_context(question),
+            {"role": "user", "content": question or "What's on my screen?", "images": [image]},
+        ]
+        t0 = time.perf_counter()
+        try:
+            answer = await self.llm.chat(messages, schema=None, temperature=0.3, think=think or None)
+        except LLMError as exc:
+            return R(msg("llm_down", lang, err=str(exc)), "error")
+        log.info("Vision (%s) answered in %.2fs", self.llm.model, time.perf_counter() - t0)
+        return R(clean_for_speech(answer) or msg("unclear", lang), "chat", data={"screen": True})
+
+    # ================================================================ memory
+    async def _memory_rules(self, text: str, source: str, lang: str) -> dict | None:
+        t = _clean_sentence(text)
+        n = normalize(t)
+        if n in LIST_ROUTINES or (("routine" in n or "shortcut" in n) and n.startswith(("what", "list", "show", "which"))):
+            return await self._memory_intent(text, source, lang, {"intent": "list_routines", "target": ""})
+        m = DELETE_ROUTINE_RE.match(t)
+        if m:
+            return await self._memory_intent(text, source, lang,
+                                             {"intent": "delete_routine", "target": m.group("a") or m.group("b")})
+        m = RECALL_RE.match(t)
+        if m:
+            return await self._memory_intent(text, source, lang,
+                                             {"intent": "recall", "target": m.group("t") or m.group("t2") or ""})
+        m = FORGET_RE.match(t)
+        if m:
+            return await self._memory_intent(text, source, lang, {"intent": "forget", "target": m.group("t")})
+        m = REMEMBER_RE.match(t)
+        if m and not n.startswith(("remember when", "remember what", "remember how")):
+            return await self._memory_intent(text, source, lang, {"intent": "remember", "target": m.group("t")})
+        return None
+
+    async def _memory_intent(self, text: str, source: str, lang: str, p: dict) -> dict:
+        intent, target = p["intent"], _clean_sentence(p.get("target", ""))
+        R = lambda reply, status, **kw: self._response(text, source, lang, intent, target, reply, status, **kw)
+        mem = self.memory
+        if not mem:
+            return R(msg("no_memory", lang), "failed")
+
+        if intent == "remember":
+            if not target:
+                return R(msg("unclear", lang), "needs_clarification")
+            fact_id, updated = mem.add_fact(target[0].upper() + target[1:])
+            return R(msg("remember_updated" if updated else "remembered", lang), "done",
+                     data={"fact": {"id": fact_id, "text": target}})
+
+        if intent == "recall":
+            facts = mem.search_facts(target, limit=5) if target else mem.facts()
+            if not facts:
+                return R(msg("no_memory_about", lang, q=target) if target else msg("nothing_remembered", lang), "done")
+            spoken = " ".join(f["text"] for f in facts[:5])
+            more = f" And {len(facts) - 5} more." if len(facts) > 5 else ""
+            intro = "Here's what I remember: " if lang == "en" else "هذا ما أتذكره: "
+            return R(intro + spoken + more, "done", data={"facts": facts})
+
+        if intent == "forget":
+            tn = normalize(target)
+            if tn in FORGET_ALL:
+                n = len(mem.facts())
+
+                def wipe() -> ActionResult:
+                    f, c = mem.clear_facts(), mem.clear_conversations()
+                    self.history.clear()
+                    return ActionResult(True, msg("forgot_all", lang), {"facts_deleted": f, "conversations_deleted": c})
+                return self._ask_confirm(R, "forget", "everything", lang, wipe, msg("confirm_forget_all", lang, n=n),
+                                         done_reply=msg("forgot_all", lang))
+            if tn in FORGET_LAST:
+                facts = mem.facts()
+                target_fact = facts[0] if facts else None
+            else:
+                found = mem.search_facts(target, limit=1)
+                target_fact = found[0] if found else None
+            if not target_fact:
+                return R(msg("no_memory_about", lang, q=target), "failed")
+            mem.delete_fact(target_fact["id"])
+            return R(msg("forgot", lang, fact=target_fact["text"]), "done", data={"deleted": target_fact})
+
+        if intent == "list_routines":
+            routines = mem.routines()
+            if not routines:
+                return R(msg("no_routines", lang), "done")
+            names = join_names([r["display"] for r in routines], lang)
+            return R(msg("routines_list", lang, list=names), "done", data={"routines": routines})
+
+        if intent == "delete_routine":
+            r = mem.delete_routine(target)
+            if not r:
+                return R(msg("routine_not_found", lang, trigger=target), "failed")
+            return R(msg("routine_deleted", lang, trigger=r["display"]), "done", data={"deleted": r})
+
+        if intent == "create_routine":
+            trigger = target.strip("\"' ")
+            steps = [st for st in p.get("steps", []) if normalize(st) != normalize(trigger)]
+            if not trigger or yes_or_no(trigger) is not None:
+                return R(msg("unclear", lang), "needs_clarification")
+            if not steps:
+                return R(msg("routine_need_steps", lang, trigger=trigger), "needs_clarification")
+            _, updated = mem.add_routine(trigger, steps)
+            key = "routine_updated" if updated else "routine_saved"
+            return R(msg(key, lang, trigger=trigger, steps=join_names(steps, lang)), "done",
+                     data={"routine": {"trigger": trigger, "steps": steps}})
+
+        return R(msg("unclear", lang), "needs_clarification")
+
+    async def _run_routine(self, routine: dict, text: str, source: str, lang: str) -> dict:
+        log.info("Running routine '%s': %s", routine["display"], routine["steps"])
+        results, pending = [], None
+        self._in_routine = True
+        try:
+            for step in routine["steps"]:
+                r = await self._handle(step, source)
+                results.append({"step": step, "status": r["status"], "reply": r["reply"]})
+                if r.get("pending_id"):
+                    pending = r          # e.g. a step that needs "are you sure?"
+        finally:
+            self._in_routine = False
+        replies = " ".join(x["reply"] for x in results if x["reply"])
+        reply = msg("routine_running", lang, trigger=routine["display"]) + " " + replies
+        status = pending["status"] if pending else ("done" if all(x["status"] in ("done", "chat") for x in results)
+                                                      else "failed")
+        return self._response(text, source, lang, "run_routine", routine["display"], reply.strip(), status,
+                              pending_id=pending["pending_id"] if pending else None,
+                              options=pending.get("options", []) if pending else [],
+                              data={"routine": routine["display"], "steps": results})
 
     async def _set_mode(self, text: str, source: str, lang: str, mode: str) -> dict:
         R = lambda reply, status, **kw: self._response(text, source, lang, "set_mode", mode, reply, status, **kw)
@@ -476,8 +734,27 @@ class Jarvis:
         resp["via"] = via
         return resp
 
+    def _memory_context(self, text: str) -> list[dict]:
+        if not self.memory:
+            return []
+        out = []
+        facts = self.memory.facts_for_prompt(text, self.max_memory_facts)
+        if facts:
+            out.append({"role": "system", "content": "What you remember about the user:\n" +
+                        "\n".join(f"- {f}" for f in facts)})
+        if PAST_TALK_RE.search(text or ""):
+            window = time_window(text)
+            past = self.memory.search_conversations(text, limit=8, since=window[0] if window else None,
+                                                    until=window[1] if window else None)
+            if past:
+                lines = [f"[{time.strftime('%Y-%m-%d %H:%M', time.localtime(r['ts']))}] User: {r['user_text']} | "
+                         f"JARVIS: {r['reply']}" for r in past]
+                out.append({"role": "system", "content": "Earlier conversations (oldest first). Use them to answer "
+                            "questions about what was said before:\n" + "\n".join(lines)})
+        return out
+
     def _messages(self, text: str, pend: Pending | None, think: bool = False) -> list[dict]:
-        msgs = [{"role": "system", "content": SYSTEM_PROMPT}, *self.history]
+        msgs = [{"role": "system", "content": SYSTEM_PROMPT}, *self._memory_context(text), *self.history]
         if think:
             msgs.append({"role": "system", "content": "The user asked you to think carefully. For chat answers, "
                          "\"reply\" may be up to 8 sentences of careful, well-reasoned analysis."})
@@ -514,8 +791,13 @@ class Jarvis:
             conf = float(data.get("confidence", 0.5))
         except (TypeError, ValueError):
             conf = 0.5
+        steps = data.get("steps") or []
+        if not isinstance(steps, list):
+            steps = [str(steps)]
         return {"intent": intent, "target": str(data.get("target") or "").strip(),
                 "browser": str(data.get("browser") or "").strip(),
+                "site": str(data.get("site") or "").strip(),
+                "steps": [str(x).strip() for x in steps if str(x).strip()][:12],
                 "reply": str(data.get("reply") or "").strip(), "confidence": max(0.0, min(conf, 1.0))}
 
     # ---------------- fast rules
@@ -545,6 +827,24 @@ class Jarvis:
                 if browser or self.executor.apps.match(t).status == "none":
                     return None          # unknown thing -> let the LLM interpret it
             return {**base, "intent": "open_app", "target": ", ".join(targets), "browser": browser}
+
+        m = PLAY_RE.match(soft_normalize(text))
+        if m and normalize(m.group("t")) not in _MEDIA_LOOKUP:
+            target, browser = split_browser(m.group("t"))
+            return {**base, "intent": "play_media", "target": target, "browser": browser,
+                    "site": m.group("site") or ""}
+
+        m = SEARCH_RE.match(soft_normalize(text))
+        if m:
+            target, browser = split_browser(m.group("t"))
+            site = m.group("site") or ""
+            if not site and _VIDEO_WORDS.search(target):
+                site = "youtube"
+                target = re.sub(r"\s+", " ", re.sub(r"^(?:an?|the|some)\s+", "", _VIDEO_WORDS.sub(" ", target))).strip() or target
+            if site or not re.search(r"\bby\b", target):     # "X by <artist>" -> let the LLM decide (song?)
+                return {**base, "intent": "web_search", "target": target, "browser": browser,
+                        "site": site or "google"}
+            return None
 
         m = CLOSE_RE.match(soft_normalize(text))
         if m:
@@ -602,7 +902,16 @@ class Jarvis:
 
         # ---------- other safe actions
         if intent == "web_search":
-            run = lambda: ex.web_search(target or text, browser or None)
+            site = p.get("site", "")
+            run = lambda: ex.web_search(target or text, browser or None, site)
+            site_name = SEARCH_SITES[resolve_search_site(site)][0]
+            reply = msg("searching", lang, q=target or text, site=site_name)
+        elif intent == "play_media":
+            if not target:
+                return R(msg("unclear", lang), "needs_clarification")
+            run = lambda: ex.play_media(target, p.get("site", ""), browser or None)
+            site_name = SEARCH_SITES[resolve_search_site(p.get("site") or ex.play_site)][0]
+            reply = msg("playing", lang, q=target, site=site_name)
         elif intent == "media_control":
             if target not in MEDIA_TARGETS:
                 return R(msg("unclear", lang), "needs_clarification")

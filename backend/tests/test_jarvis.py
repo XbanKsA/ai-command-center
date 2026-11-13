@@ -375,3 +375,201 @@ def test_compact_mode_words():
     from jarvis import detect_mode_command
     assert detect_mode_command("swap to automode") == "auto"
     assert detect_mode_command("Normalmode please") == "normal"
+
+
+# ---------------------------------------------------------------- search / play (YouTube, Spotify)
+
+async def test_search_cat_video_goes_to_youtube(make):
+    j, llm = make()
+    r = await j.handle_text("search for a cat video")
+    assert llm.calls == [] and r["status"] == "done"
+    assert r["data"]["url"] == "https://www.youtube.com/results?search_query=cat"
+    assert r["reply"] == "Searching YouTube for cat."
+
+
+async def test_search_song_via_llm_uses_youtube(make):
+    j, llm = make({"bad romance": {"intent": "web_search", "target": "bad romance lady gaga", "browser": "",
+                                    "site": "youtube", "steps": [], "reply": "", "confidence": 0.9}})
+    r = await j.handle_text("search for bad romance by lady gaga")
+    assert len(llm.calls) == 1
+    assert r["data"]["url"] == "https://www.youtube.com/results?search_query=bad+romance+lady+gaga"
+
+
+async def test_play_opens_first_video(make):
+    j, llm = make()
+    r = await j.handle_text("play bad romance by lady gaga")
+    assert llm.calls == [] and r["intent"] == "play_media"
+    assert r["data"]["url"].startswith("https://www.youtube.com/watch?v=")
+    assert r["reply"] == "Playing bad romance by lady gaga on YouTube."
+    r = await j.handle_text("play lofi beats on youtube music")
+    assert r["data"]["url"].startswith("https://music.youtube.com/watch?v=")
+
+
+async def test_play_on_spotify_uses_app(make):
+    j, _ = make()
+    r = await j.handle_text("play shape of you on spotify")
+    assert r["data"]["url"] == "spotify:search:shape%20of%20you" and r["data"]["site"] == "Spotify"
+
+
+async def test_plain_play_is_still_media_key_and_google_default(make):
+    j, _ = make()
+    assert (await j.handle_text("play"))["intent"] == "media_control"
+    r = await j.handle_text("search for the weather in riyadh")
+    assert r["data"]["url"] == "https://www.google.com/search?q=the+weather+in+riyadh"
+    r = await j.handle_text("look up rtx 5070 prices on amazon")
+    assert r["data"]["url"].startswith("https://www.amazon.sa/s?k=rtx+5070+prices")
+
+
+# ---------------------------------------------------------------- screen
+
+async def test_screen_question_sends_screenshot(make, monkeypatch):
+    import jarvis as jmod
+    monkeypatch.setattr(jmod, "capture_screen", lambda max_side: "BASE64IMAGE")
+    j, llm = make({"on my screen": "You have **VS Code** open with a SyntaxError on line 12."})
+    r = await j.handle_text("Can you see what's on my screen?")
+    assert r["status"] == "chat" and r["via"] == "vision"
+    assert r["reply"] == "You have VS Code open with a SyntaxError on line 12."     # markdown stripped
+    user_msg = llm.calls[-1][-1]
+    assert user_msg["images"] == ["BASE64IMAGE"] and llm.thinks[-1] is None
+
+
+async def test_screen_without_vision_model_or_pillow(make, monkeypatch):
+    import jarvis as jmod
+    from screen import ScreenError
+    j, llm = make()
+    llm.model = "qwen2.5-coder:3b"
+    assert "can't see images" in (await j.handle_text("what's on my screen"))["reply"]
+    llm.model = "qwen3.5:9b"
+
+    def boom(max_side):
+        raise ScreenError("Screen reading needs the Pillow package. Run setup.bat once to install it.")
+    monkeypatch.setattr(jmod, "capture_screen", boom)
+    assert "setup.bat" in (await j.handle_text("what does this error say"))["reply"]
+
+
+def test_screen_phrase_detection():
+    from screen import is_screen_question
+    assert is_screen_question("can you see my screen")
+    assert is_screen_question("What does this error say?")
+    assert not is_screen_question("open the screen recorder")
+    assert not is_screen_question("tell me a joke")
+
+
+# ---------------------------------------------------------------- memory
+
+@pytest.fixture
+def jmem(dry_executor, tmp_path):
+    from memory import MemoryStore
+    mem = MemoryStore(tmp_path / "memory.db")
+
+    def _make(rules=None):
+        llm = FakeLLM(rules)
+        return Jarvis(llm, dry_executor, TelemetryCollector(), memory=mem), llm
+    yield _make, mem
+    mem.close()
+
+
+async def test_remember_and_use_facts(jmem):
+    make_j, mem = jmem
+    j, llm = make_j()
+    r = await j.handle_text("Remember that my games are on D:\\Games.")
+    assert r["reply"] == "Got it, I'll remember that." and llm.calls == []
+    assert mem.facts()[0]["text"] == "My games are on D:\\Games."
+    await j.handle_text("where are my games installed?")
+    system_msgs = [m["content"] for m in llm.calls[-1] if m["role"] == "system"]
+    assert any("My games are on D:\\Games." in m for m in system_msgs)
+
+
+async def test_recall_and_forget(jmem):
+    make_j, mem = jmem
+    j, llm = make_j()
+    await j.handle_text("remember my favorite game is Deadlock")
+    await j.handle_text("remember that my birthday is March 3")
+    r = await j.handle_text("What do you remember?")
+    assert "Deadlock" in r["reply"] and "March 3" in r["reply"] and llm.calls == []
+    r = await j.handle_text("what do you remember about my birthday")
+    assert r["data"]["facts"][0]["text"] == "My birthday is March 3."
+    r = await j.handle_text("forget my birthday")
+    assert r["reply"] == "Okay, I forgot: My birthday is March 3." and len(mem.facts()) == 1
+    r = await j.handle_text("forget about my cat")
+    assert r["status"] == "failed"
+    # "what do you know about X" is a normal question for the AI, not a memory lookup
+    await j.handle_text("what do you know about black holes")
+    assert len(llm.calls) == 1
+
+
+async def test_forget_everything_needs_confirmation(jmem):
+    make_j, mem = jmem
+    j, _ = make_j()
+    await j.handle_text("remember that I like pizza")
+    mem.add_routine("gaming time", ["open steam"])
+    r = await j.handle_text("forget everything")
+    assert r["status"] == "needs_confirmation" and len(mem.facts()) == 1
+    r = await j.handle_text("yes")
+    assert r["status"] == "done" and mem.facts() == [] and mem.count_conversations() <= 1
+    assert len(mem.routines()) == 1                       # routines are kept
+
+
+async def test_forget_it_cancels_a_question(jmem, monkeypatch):
+    make_j, mem = jmem
+    j, _ = make_j()
+    await j.handle_text("remember that I like pizza")
+    monkeypatch.setattr(j.executor, "find_processes", lambda q: {"Spotify.exe": [1]})
+    await j.handle_text("close spotify")
+    assert (await j.handle_text("forget it"))["status"] == "cancelled"
+    assert len(mem.facts()) == 1
+
+
+async def test_history_survives_restart_and_past_conversations(jmem):
+    make_j, mem = jmem
+    j, _ = make_j()
+    await j.handle_text("who wrote hamlet")
+    j2, llm2 = make_j()
+    assert any(m["content"] == "who wrote hamlet" for m in j2.history)
+    # an old conversation from yesterday
+    import time as _t
+    with mem._db:
+        mem._db.execute("INSERT INTO conversations(ts, source, user_text, reply, intent) VALUES (?,?,?,?,?)",
+                        (_t.time() - 86400 - 60, "voice", "how do I overclock my gpu", "Use MSI Afterburner.", "chat"))
+    await j2.handle_text("what did we talk about yesterday")
+    sys_msgs = [m["content"] for m in llm2.calls[-1] if m["role"] == "system"]
+    assert any("MSI Afterburner" in m for m in sys_msgs)
+
+
+# ---------------------------------------------------------------- routines
+
+async def test_create_and_run_routine(jmem):
+    make_j, mem = jmem
+    j, llm = make_j({"when i say": {"intent": "create_routine", "target": "gaming time", "browser": "", "site": "",
+                                    "steps": ["open steam", "open discord", "volume up"], "reply": "",
+                                    "confidence": 0.95}})
+    r = await j.handle_text("When I say gaming time, open Steam and Discord and turn the volume up")
+    assert r["reply"] == "Got it. When you say gaming time, I'll open steam, open discord and volume up."
+    calls = len(llm.calls)
+    r = await j.handle_text("Gaming time!")
+    assert len(llm.calls) == calls and r["via"] == "routine" and r["status"] == "done"
+    assert [s["status"] for s in r["data"]["steps"]] == ["done", "done", "done"]
+    assert r["reply"] == "Running gaming time. Opening Steam. Opening Discord. Volume up."
+    r = await j.handle_text("what routines do I have")
+    assert "gaming time" in r["reply"]
+    r = await j.handle_text("delete the gaming time routine")
+    assert r["status"] == "done" and mem.routines() == []
+
+
+async def test_routine_with_confirmation_step_and_no_recursion(jmem, monkeypatch):
+    make_j, mem = jmem
+    j, _ = make_j()
+    monkeypatch.setattr(j.executor, "find_processes", lambda q: {"Discord.exe": [5]})
+    mem.add_routine("bed time", ["bed time", "volume down", "close discord"])   # first step = itself
+    r = await j.handle_text("bed time")
+    assert r["status"] == "needs_confirmation" and r["pending_id"]
+    assert r["data"]["steps"][0]["status"] != "done" or "Running" not in r["data"]["steps"][0]["reply"]
+    assert (await j.handle_text("yes"))["status"] == "done"
+
+
+async def test_routine_needs_steps(jmem):
+    make_j, mem = jmem
+    j, _ = make_j({"when i say": {"intent": "create_routine", "target": "movie night", "browser": "", "site": "",
+                                  "steps": [], "reply": "", "confidence": 0.9}})
+    r = await j.handle_text("when I say movie night")
+    assert r["status"] == "needs_clarification" and mem.routines() == []

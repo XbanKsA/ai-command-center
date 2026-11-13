@@ -43,6 +43,7 @@ from hotkey import GlobalHotkey
 from hub import Client, Hub
 from jarvis import Jarvis
 from llm import OllamaClient
+from memory import MemoryStore
 from modes import ModeManager
 from telemetry import TelemetryCollector
 from voice import VoiceEngine
@@ -114,6 +115,7 @@ class State:
     discovery: DiscoveryService | None = None
     hotkey: GlobalHotkey | None = None
     modes: ModeManager
+    memory: MemoryStore | None = None
     tasks: list[asyncio.Task]
 
 
@@ -132,7 +134,8 @@ def create_app(settings: Settings | None = None, llm: OllamaClient | None = None
         loop = asyncio.get_running_loop()
         st.auth = AuthManager(settings.data_dir, settings.max_pin_attempts, settings.lockout_seconds, pin=pin)
         st.telemetry = TelemetryCollector()
-        st.executor = Executor(dry_run=settings.dry_run, app_index=AppIndex())
+        st.executor = Executor(dry_run=settings.dry_run, app_index=AppIndex(), play_site=settings.play_site)
+        st.memory = MemoryStore(settings.data_dir / "memory.db") if settings.memory_enabled else None
         st.llm = llm or OllamaClient(settings.ollama_url, settings.model_normal, settings.ollama_timeout,
                                      settings.ollama_keep_alive, settings.think_default, settings.think_timeout)
         st.hub = Hub()
@@ -148,7 +151,8 @@ def create_app(settings: Settings | None = None, llm: OllamaClient | None = None
                                game_detector=GameDetector(settings.game_processes, settings.game_ignore)
                                if settings.game_detection else None)
         st.jarvis = Jarvis(st.llm, st.executor, st.telemetry, settings.confirm_timeout,
-                           fast_commands=settings.fast_commands, modes=st.modes)
+                           fast_commands=settings.fast_commands, modes=st.modes, memory=st.memory,
+                           screen_max_side=settings.screen_max_side, max_memory_facts=settings.memory_max_facts)
 
         async def push_voice_events(resp: dict):
             if resp.get("source") == "voice":
@@ -188,6 +192,8 @@ def create_app(settings: Settings | None = None, llm: OllamaClient | None = None
             if background:
                 await st.modes.stop(unload=settings.unload_on_exit)
             st.voice.stop()
+            if st.memory:
+                st.memory.close()
             if st.hotkey:
                 st.hotkey.stop()
             if st.discovery:
@@ -225,6 +231,8 @@ def create_app(settings: Settings | None = None, llm: OllamaClient | None = None
                           "announcements_sent": disc.announcements_sent if disc else 0,
                           "probes_answered": disc.probes_answered if disc else 0},
             "clients": st.hub.summary(), "paired_devices": len(st.auth.paired_devices()),
+            "memory": ({"facts": len(st.memory.facts()), "routines": len(st.memory.routines()),
+                        "conversations": st.memory.count_conversations()} if st.memory else None),
         }
 
     def require_token(request: Request) -> str:
@@ -295,6 +303,48 @@ def create_app(settings: Settings | None = None, llm: OllamaClient | None = None
             return await st.modes.set_mode(str(b.get("mode", "")), source="tablet")
         except ValueError as exc:
             raise HTTPException(400, str(exc))
+
+    def need_memory() -> MemoryStore:
+        if not st.memory:
+            raise HTTPException(404, "Memory is turned off (MEMORY_ENABLED=false)")
+        return st.memory
+
+    @app.get("/api/memory")
+    async def memory_get(_=Depends(require_token)):
+        """All remembered facts and routines (for the tablet's memory screen)."""
+        return need_memory().summary()
+
+    @app.post("/api/memory/facts")
+    async def memory_add(request: Request, _=Depends(require_token)):
+        text = str((await request.json()).get("text", "")).strip()
+        try:
+            fact_id, updated = need_memory().add_fact(text)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc))
+        return {"id": fact_id, "updated": updated}
+
+    @app.delete("/api/memory/facts/{fact_id}")
+    async def memory_delete(fact_id: int, _=Depends(require_token)):
+        if not need_memory().delete_fact(fact_id):
+            raise HTTPException(404, "No such memory")
+        return {"deleted": fact_id}
+
+    @app.post("/api/routines")
+    async def routine_add(request: Request, _=Depends(require_token)):
+        """Body: {"trigger": "gaming time", "steps": ["open steam", "open discord", "gaming mode"]}"""
+        b = await request.json()
+        steps = b.get("steps") or []
+        try:
+            rid, updated = need_memory().add_routine(str(b.get("trigger", "")), [str(x) for x in steps])
+        except ValueError as exc:
+            raise HTTPException(400, str(exc))
+        return {"id": rid, "updated": updated}
+
+    @app.delete("/api/routines/{routine_id}")
+    async def routine_delete(routine_id: int, _=Depends(require_token)):
+        if not need_memory().delete_routine_id(routine_id):
+            raise HTTPException(404, "No such routine")
+        return {"deleted": routine_id}
 
     @app.post("/api/voice")
     async def voice_upload(request: Request, _=Depends(require_token)):
@@ -418,6 +468,9 @@ def create_app(settings: Settings | None = None, llm: OllamaClient | None = None
                     await st.hub.send(client, {"type": "telemetry", "request_id": rid, **st.telemetry.snapshot()})
                 elif t == "get_status":
                     await st.hub.send(client, {"type": "status", "request_id": rid, **(await status_payload())})
+                elif t == "get_memory":
+                    await st.hub.send(client, {"type": "memory", "request_id": rid,
+                                               **(st.memory.summary() if st.memory else {"enabled": False})})
                 elif t == "get_mode":
                     await st.hub.send(client, {"type": "mode", "request_id": rid, **st.modes.status()})
                 elif t == "set_mode":

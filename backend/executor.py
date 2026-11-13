@@ -306,6 +306,52 @@ def find_browser_path(exe: str) -> str | None:
     return None
 
 
+# ----------------------------------------------------------------- site search / play
+
+SEARCH_SITES = {
+    "google": ("Google", "https://www.google.com/search?q={q}"),
+    "youtube": ("YouTube", "https://www.youtube.com/results?search_query={q}"),
+    "youtube music": ("YouTube Music", "https://music.youtube.com/search?q={q}"),
+    "spotify": ("Spotify", "https://open.spotify.com/search/{q}"),
+    "amazon": ("Amazon", "https://www.amazon.sa/s?k={q}"),
+    "github": ("GitHub", "https://github.com/search?q={q}"),
+    "reddit": ("Reddit", "https://www.reddit.com/search/?q={q}"),
+    "twitch": ("Twitch", "https://www.twitch.tv/search?term={q}"),
+    "wikipedia": ("Wikipedia", "https://en.wikipedia.org/w/index.php?search={q}"),
+    "steam": ("Steam store", "https://store.steampowered.com/search/?term={q}"),
+    "maps": ("Google Maps", "https://www.google.com/maps/search/{q}"),
+    "images": ("Google Images", "https://www.google.com/search?tbm=isch&q={q}"),
+    "x": ("X", "https://x.com/search?q={q}"),
+}
+_SITE_ALIASES = {
+    "yt": "youtube", "you tube": "youtube", "youtube music": "youtube music", "yt music": "youtube music",
+    "music": "youtube music", "google maps": "maps", "twitter": "x", "steam store": "steam",
+    "google images": "images", "the web": "google", "web": "google", "internet": "google", "": "google",
+}
+
+
+def resolve_search_site(site: str) -> str:
+    n = normalize(site or "")
+    n = _SITE_ALIASES.get(n, n)
+    return n if n in SEARCH_SITES else "google"
+
+
+def find_youtube_video(query: str, timeout: float = 6.0) -> str | None:
+    """ID of the first YouTube search result (no API key needed). None if it can't be found."""
+    import httpx
+    url = "https://www.youtube.com/results?search_query=" + urllib.parse.quote_plus(query)
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) "
+                             "Chrome/124.0 Safari/537.36", "Accept-Language": "en-US,en;q=0.9"}
+    try:
+        r = httpx.get(url, headers=headers, timeout=timeout, follow_redirects=True)
+        m = re.search(r'"videoRenderer":\{"videoId":"([A-Za-z0-9_-]{11})"', r.text) or \
+            re.search(r'"videoId":"([A-Za-z0-9_-]{11})"', r.text)
+        return m.group(1) if m else None
+    except Exception as exc:
+        log.debug("YouTube lookup failed: %s", exc)
+        return None
+
+
 # ----------------------------------------------------------------- executor
 
 PROTECTED_PROCESSES = {
@@ -322,8 +368,9 @@ MEDIA_KEYS = {
 
 
 class Executor:
-    def __init__(self, dry_run: bool = False, app_index: AppIndex | None = None):
+    def __init__(self, dry_run: bool = False, app_index: AppIndex | None = None, play_site: str = "youtube"):
         self.dry_run = dry_run
+        self.play_site = play_site
         self.apps = app_index or AppIndex()
 
     # ---- helpers
@@ -461,12 +508,41 @@ class Executor:
         res.data.update({"urls": urls, "url": urls[0] if urls else None, "browser": browser, "browser_path": exe_path})
         return res
 
-    def web_search(self, query: str, browser: str | None = None) -> ActionResult:
+    def web_search(self, query: str, browser: str | None = None, site: str = "") -> ActionResult:
+        """Search Google (default) or a specific site: youtube, youtube music, spotify, amazon, github..."""
         q = (query or "").strip()
         if not q:
             return ActionResult(False, "What should I search for?")
-        url = "https://www.google.com/search?q=" + urllib.parse.quote_plus(q)
-        return self.open_urls([url], browser)
+        key = resolve_search_site(site)
+        if key == "spotify" and not browser:
+            app = self.apps.match("spotify")
+            if app.status == "match":            # Spotify app installed -> search inside the app
+                uri = "spotify:search:" + urllib.parse.quote(q)
+                res = self._run(f"Searching Spotify for {q}", lambda: os.startfile(uri))
+                res.data.update({"url": uri, "site": "Spotify"})
+                return res
+        name, template = SEARCH_SITES[key]
+        res = self.open_urls([template.format(q=urllib.parse.quote_plus(q))], browser)
+        res.data["site"] = name
+        return res
+
+    def play_media(self, query: str, site: str = "", browser: str | None = None) -> ActionResult:
+        """Play a song/video: opens the FIRST YouTube result directly (or searches Spotify).
+        Falls back to the search results page if the first result can't be found."""
+        q = (query or "").strip()
+        if not q:
+            return ActionResult(False, "What should I play?")
+        key = resolve_search_site(site or self.play_site)
+        if key not in ("youtube", "youtube music"):
+            return self.web_search(q, browser, key)
+        video = find_youtube_video(q) if not self.dry_run else "dQw4w9WgXcQ"
+        if not video:
+            log.info("No YouTube result found for %r -> opening the search page", q)
+            return self.web_search(q, browser, key)
+        host = "music.youtube.com" if key == "youtube music" else "www.youtube.com"
+        res = self.open_urls([f"https://{host}/watch?v={video}"], browser)
+        res.data.update({"site": SEARCH_SITES[key][0], "video_id": video})
+        return res
 
     # ---- media / system
     def media(self, key: str) -> ActionResult:

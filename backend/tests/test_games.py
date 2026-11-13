@@ -71,3 +71,23 @@ def test_access_denied_processes_are_skipped():
             raise psutil.AccessDenied()
     d = GameDetector(process_iter=lambda attrs: [Denied(), P(9, "project8.exe", DEADLOCK)])
     assert d.scan().name == "Deadlock"
+
+
+def test_launcher_background_services_are_not_games():
+    """Found on the real PC: Epic Online Services runs all the time and was treated as a game."""
+    services = [
+        ("EpicOnlineServices.exe", r"C:\Program Files (x86)\Epic Games\Epic Online Services\EpicOnlineServices.exe"),
+        ("EpicOnlineServicesHost.exe", r"C:\Program Files (x86)\Epic Games\Epic Online Services\service\EpicOnlineServicesHost.exe"),
+        ("EOSOverlayRenderer-Win64-Shipping.exe", r"C:\Program Files (x86)\Epic Games\Epic Online Services\managedArtifacts\x\EOSOverlayRenderer-Win64-Shipping.exe"),
+        ("UnrealCEFSubProcess.exe", r"C:\Program Files (x86)\Epic Games\Launcher\Engine\Binaries\Win64\UnrealCEFSubProcess.exe"),
+        ("SomeNewHelper.exe", r"C:\Program Files (x86)\Epic Games\Launcher\Portal\Binaries\Win64\SomeNewHelper.exe"),
+        ("EACefSubProcess.exe", r"C:\Program Files\Electronic Arts\EA Desktop\EA Desktop\EACefSubProcess.exe"),
+        ("RiotClientElectron.exe", r"C:\Riot Games\Riot Client\UX\RiotClientElectron.exe"),
+        ("vrstartup.exe", r"C:\Program Files (x86)\Steam\steamapps\common\SteamVR\bin\win64\vrstartup.exe"),
+    ]
+    d = GameDetector(process_iter=procs(*DESKTOP, *services))
+    assert d.scan() is None
+    # ...but real games from the same stores are still detected
+    fortnite = ("FortniteClient-Win64-Shipping.exe",
+                r"C:\Program Files\Epic Games\Fortnite\FortniteGame\Binaries\Win64\FortniteClient-Win64-Shipping.exe")
+    assert GameDetector(process_iter=procs(*services, fortnite)).scan().name == "Fortnite"

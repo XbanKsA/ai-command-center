@@ -93,3 +93,29 @@ def test_open_urls_dry_run(dry_executor):
     r = dry_executor.open_urls(["https://a.com", "https://b.com"], "chrome")
     assert r.ok and r.data["urls"] == ["https://a.com", "https://b.com"] and r.data["browser"] == "chrome"
     assert dry_executor.launch_target("youtube").data["url"] == "https://www.youtube.com"
+
+
+def test_find_youtube_video_parses_first_result(monkeypatch):
+    import httpx
+    from executor import find_youtube_video
+    html = ('...{"adSlotRenderer":{}},{"videoRenderer":{"videoId":"qrO4YZeyl0I","thumbnail":{}}},'
+            '{"videoRenderer":{"videoId":"bESGLojNYSo"}}...')
+
+    class R:
+        text = html
+    monkeypatch.setattr(httpx, "get", lambda *a, **k: R())
+    assert find_youtube_video("bad romance lady gaga") == "qrO4YZeyl0I"
+
+    def offline(*a, **k):
+        raise httpx.ConnectError("offline")
+    monkeypatch.setattr(httpx, "get", offline)
+    assert find_youtube_video("anything") is None
+
+
+def test_play_falls_back_to_search_page(dry_executor, monkeypatch):
+    import executor
+    dry_executor.dry_run = False
+    monkeypatch.setattr(executor, "find_youtube_video", lambda q: None)
+    monkeypatch.setattr(executor, "IS_WINDOWS", False)
+    r = dry_executor.play_media("some song")
+    assert r.data["urls"] == ["https://www.youtube.com/results?search_query=some+song"]
