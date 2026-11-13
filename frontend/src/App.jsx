@@ -1,3 +1,4 @@
+import ReplyToast from './components/ReplyToast'
 import { useJarvis } from './useJarvis'
 import PinScreen from './components/PinScreen'
 import Stats from './components/Stats'
@@ -5,20 +6,25 @@ import Clock from './components/Clock'
 import Key from './components/Key'
 
 const keys = [
-  { id: 1, title: 'Steam', subtitle: 'App' },
-  { id: 2, title: 'Discord', subtitle: 'App' },
-  { id: 3, title: 'YouTube', subtitle: 'Website' },
-  { id: 4, title: 'Spotify', subtitle: 'App' },
-  { id: 5, title: 'Deadlock', subtitle: 'Game' },
-  { id: 6, title: 'Gaming time', subtitle: 'Routine' },
-  { id: 7, title: 'VS Code', subtitle: 'App' },
-  { id: 8, title: 'Lock PC', subtitle: 'System' },
+  { id: 1, title: 'Steam', subtitle: 'App', action: { type: 'launch', target: 'steam' } },
+  { id: 2, title: 'Discord', subtitle: 'App', action: { type: 'launch', target: 'discord' } },
+  { id: 3, title: 'YouTube', subtitle: 'Website', action: { type: 'launch', target: 'https://www.youtube.com' } },
+  { id: 4, title: 'Spotify', subtitle: 'App', action: { type: 'launch', target: 'spotify' } },
+  { id: 5, title: 'Deadlock', subtitle: 'Game', action: { type: 'launch', target: 'deadlock' } },
+  { id: 6, title: 'Gaming time', subtitle: 'Routine', action: { type: 'ask', text: 'gaming time' } },
+  { id: 7, title: 'VS Code', subtitle: 'App', action: { type: 'launch', target: 'visual studio code' } },
+  { id: 8, title: 'Which model?', subtitle: 'Ask JARVIS', action: { type: 'ask', text: 'which model are you using' } },
 ]
+
 
 const TOTAL_SLOTS = 15
 
 function App() {
-    const { status, telemetry, error, sendPin } = useJarvis()
+    const { status, telemetry, error, sendPin, launch, ask, confirm, reply, clearReply } = useJarvis()
+    function runKey(k) {
+      if (k.action.type === 'launch') launch(k.action.target)
+      else ask(k.action.text)
+    }
 
   if (status === 'need_pin') return <PinScreen onSubmit={sendPin} error={error} />
 
@@ -48,7 +54,7 @@ function App() {
             key={k.id}
             title={k.title}
             subtitle={k.subtitle}
-            onPress={() => alert(`You pressed ${k.title}`)}
+            onPress={() => runKey(k)}
           />
         ))}
 
@@ -61,6 +67,7 @@ function App() {
           </button>
         ))}
       </main>
+      <ReplyToast reply={reply} onClose={clearReply} onConfirm={confirm} />
     </div>
   )
 }

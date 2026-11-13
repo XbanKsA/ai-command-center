@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 
 const SERVER = 'ws://localhost:8765/ws' // later: found automatically on Wi-Fi
 
@@ -6,6 +6,7 @@ export function useJarvis() {
   const [status, setStatus] = useState('connecting') // connecting , need_pin , connected , offline
   const [telemetry, setTelemetry] = useState(null)
   const [error, setError] = useState('')
+  const [reply, setReply] = useState(null)
   const socketRef = useRef(null)
 
   useEffect(() => {
@@ -31,7 +32,11 @@ export function useJarvis() {
           if (msg.reason === 'invalid_token') localStorage.removeItem('jarvis_token')
           if (msg.reason === 'invalid_pin') setError('Wrong PIN, try again.')
           if (msg.reason === 'locked_out') setError(`Too many wrong PINs. Wait ${msg.retry_after} seconds.`)
-          setStatus('need_pin')
+          setStatus('need_pin') 
+        } else if (msg.type === 'jarvis_reply' || msg.type === 'jarvis_event') {
+        setReply({ text: msg.reply, status: msg.status, pendingId: msg.pending_id })
+        } else if (msg.type === 'launch_result') {
+        setReply({ text: msg.message, status: msg.ok ? 'done' : 'failed' })
         } else if (msg.type === 'telemetry') {
           setTelemetry(msg)
         }
@@ -53,9 +58,17 @@ export function useJarvis() {
     }
   }, [])
 
-  function sendPin(pin) {
-    socketRef.current?.send(JSON.stringify({ type: 'auth', pin, device_name: 'Tablet app' }))
+  function send(data) {
+    const ws = socketRef.current
+    if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(data))
   }
 
-  return { status, telemetry, error, sendPin }
+  function sendPin(pin) { send({ type: 'auth', pin, device_name: 'Tablet app' }) }
+  function launch(target) { send({ type: 'launch', target }) }
+  function ask(text) { send({ type: 'chat', text }) }
+  function confirm(pendingId, approve) { send({ type: 'confirm', pending_id: pendingId, approve }) }
+
+  const clearReply = useCallback(() => setReply(null), [])
+
+  return { status, telemetry, error, sendPin, launch, ask, confirm, reply, clearReply }
 }
