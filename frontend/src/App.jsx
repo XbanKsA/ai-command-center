@@ -1,3 +1,6 @@
+import { useJarvis } from './useJarvis'
+import PinScreen from './components/PinScreen'
+import Stats from './components/Stats'
 import Clock from './components/Clock'
 import Key from './components/Key'
 
@@ -15,12 +18,27 @@ const keys = [
 const TOTAL_SLOTS = 15
 
 function App() {
+    const { status, telemetry, error, sendPin } = useJarvis()
+
+  if (status === 'need_pin') return <PinScreen onSubmit={sendPin} error={error} />
+
+  if (status === 'offline' || status === 'connecting') {
+    return (
+      <div className="h-screen bg-black flex items-center justify-center">
+        <div dir="rtl" className="rounded-3xl border border-red-900 bg-red-950/40 p-10 text-center">
+          <h1 className="text-3xl font-bold text-red-300">تعذر الاتصال بالسيرفر! ⚠️</h1>
+          <p className="mt-3 text-lg text-red-100/80">تأكد أن كلا الجهازين متصلان بنفس شبكة الـ Wi-Fi.</p>
+        </div>
+      </div>
+    )
+  }
   const emptySlots = TOTAL_SLOTS - keys.length
 
   return (
     <div className="h-screen bg-black text-white p-6 flex flex-col gap-6">
       <header className="flex items-center justify-between">
         <h1 className="text-2xl font-bold tracking-[0.3em] text-cyan-400">JARVIS</h1>
+           <Stats t={telemetry} />
            <Clock />
       </header>
 
