@@ -1,3 +1,6 @@
+import { useState } from 'react'
+import { useKeys } from './useKeys'
+import KeyEditor from './components/KeyEditor'
 import ReplyToast from './components/ReplyToast'
 import { useJarvis } from './useJarvis'
 import PinScreen from './components/PinScreen'
@@ -5,27 +8,21 @@ import Stats from './components/Stats'
 import Clock from './components/Clock'
 import Key from './components/Key'
 
-const keys = [
-  { id: 1, title: 'Steam', subtitle: 'App', action: { type: 'launch', target: 'steam' } },
-  { id: 2, title: 'Discord', subtitle: 'App', action: { type: 'launch', target: 'discord' } },
-  { id: 3, title: 'YouTube', subtitle: 'Website', action: { type: 'launch', target: 'https://www.youtube.com' } },
-  { id: 4, title: 'Spotify', subtitle: 'App', action: { type: 'launch', target: 'spotify' } },
-  { id: 5, title: 'Deadlock', subtitle: 'Game', action: { type: 'launch', target: 'deadlock' } },
-  { id: 6, title: 'Gaming time', subtitle: 'Routine', action: { type: 'ask', text: 'gaming time' } },
-  { id: 7, title: 'VS Code', subtitle: 'App', action: { type: 'launch', target: 'visual studio code' } },
-  { id: 8, title: 'Which model?', subtitle: 'Ask JARVIS', action: { type: 'ask', text: 'which model are you using' } },
-]
-
-
-const TOTAL_SLOTS = 15
 
 function App() {
-    const { status, telemetry, error, sendPin, launch, ask, confirm, reply, clearReply } = useJarvis()
+      const { status, telemetry, error, sendPin, launch, ask, confirm, reply, clearReply, apps, searchApps } = useJarvis()
     function runKey(k) {
       if (k.action.type === 'launch') launch(k.action.target)
       else ask(k.action.text)
     }
-
+    function pressSlot(i) {
+      const k = slots[i]
+      if (!k || editMode) setEditing(i) // empty slot or edit mode -> open the editor
+      else runKey(k)                   // normal key -> run it
+    }
+    const { slots, saveKey, deleteKey } = useKeys()
+    const [editMode, setEditMode] = useState(false)
+    const [editing, setEditing] = useState(null)
   if (status === 'need_pin') return <PinScreen onSubmit={sendPin} error={error} />
 
   if (status === 'offline' || status === 'connecting') {
@@ -38,36 +35,50 @@ function App() {
       </div>
     )
   }
-  const emptySlots = TOTAL_SLOTS - keys.length
+
 
   return (
     <div className="h-screen bg-black text-white p-6 flex flex-col gap-6">
       <header className="flex items-center justify-between">
         <h1 className="text-2xl font-bold tracking-[0.3em] text-cyan-400">JARVIS</h1>
            <Stats t={telemetry} />
-           <Clock />
+                      <div className="flex items-center gap-4">
+             <button
+               onClick={() => setEditMode(!editMode)}
+               className={`h-10 rounded-xl border px-4 ${editMode ? 'border-amber-400 bg-amber-400 font-bold text-black' : 'border-slate-700 text-slate-300'}`}
+             >
+               {editMode ? 'Done' : 'Edit'}
+             </button>
+             <Clock />
+           </div>
       </header>
 
       <main className="grid grid-cols-5 grid-rows-3 gap-4 flex-1">
-        {keys.map((k) => (
-          <Key
-            key={k.id}
-            title={k.title}
-            subtitle={k.subtitle}
-            onPress={() => runKey(k)}
-          />
-        ))}
-
-        {Array.from({ length: emptySlots }).map((_, i) => (
-          <button
-            key={`empty-${i}`}
-            className="rounded-2xl border-2 border-dashed border-slate-800 text-slate-500 hover:border-slate-600"
-          >
-            + Add key
-          </button>
-        ))}
+        {slots.map((k, i) =>
+          k ? (
+            <Key key={i} title={k.title} subtitle={k.subtitle} onPress={() => pressSlot(i)} />
+          ) : (
+            <button
+              key={i}
+              onClick={() => pressSlot(i)}
+              className="rounded-2xl border-2 border-dashed border-slate-800 text-slate-500 hover:border-slate-600"
+            >
+              + Add key
+            </button>
+          )
+        )}
       </main>
       <ReplyToast reply={reply} onClose={clearReply} onConfirm={confirm} />
+            {editing !== null && (
+        <KeyEditor
+          initial={slots[editing]}
+          apps={apps}
+          onSearchApps={searchApps}
+          onSave={(k) => { saveKey(editing, k); setEditing(null) }}
+          onDelete={() => { deleteKey(editing); setEditing(null) }}
+          onCancel={() => setEditing(null)}
+        />
+      )}
     </div>
   )
 }

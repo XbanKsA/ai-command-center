@@ -7,6 +7,7 @@ export function useJarvis() {
   const [telemetry, setTelemetry] = useState(null)
   const [error, setError] = useState('')
   const [reply, setReply] = useState(null)
+  const [apps, setApps] = useState([])
   const socketRef = useRef(null)
 
   useEffect(() => {
@@ -37,6 +38,8 @@ export function useJarvis() {
         setReply({ text: msg.reply, status: msg.status, pendingId: msg.pending_id })
         } else if (msg.type === 'launch_result') {
         setReply({ text: msg.message, status: msg.ok ? 'done' : 'failed' })
+        } else if (msg.type === 'apps') {
+          setApps(msg.apps)
         } else if (msg.type === 'telemetry') {
           setTelemetry(msg)
         }
@@ -69,6 +72,10 @@ export function useJarvis() {
   function confirm(pendingId, approve) { send({ type: 'confirm', pending_id: pendingId, approve }) }
 
   const clearReply = useCallback(() => setReply(null), [])
+  const searchApps = useCallback((query) => {
+  const ws = socketRef.current
+  if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'list_apps', query }))
+}, [])
 
-  return { status, telemetry, error, sendPin, launch, ask, confirm, reply, clearReply }
+    return { status, telemetry, error, sendPin, launch, ask, confirm, reply, clearReply, apps, searchApps }
 }
