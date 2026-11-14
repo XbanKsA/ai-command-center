@@ -8,6 +8,7 @@ export function useJarvis() {
   const [error, setError] = useState('')
   const [reply, setReply] = useState(null)
   const [apps, setApps] = useState([])
+  const [mode, setModeInfo] = useState(null)
   const socketRef = useRef(null)
 
   useEffect(() => {
@@ -40,6 +41,8 @@ export function useJarvis() {
         setReply({ text: msg.message, status: msg.ok ? 'done' : 'failed' })
         } else if (msg.type === 'apps') {
           setApps(msg.apps)
+        } else if (msg.type === 'mode') {
+          setModeInfo(msg)
         } else if (msg.type === 'telemetry') {
           setTelemetry(msg)
         }
@@ -69,6 +72,7 @@ export function useJarvis() {
   function sendPin(pin) { send({ type: 'auth', pin, device_name: 'Tablet app' }) }
   function launch(target) { send({ type: 'launch', target }) }
   function ask(text) { send({ type: 'chat', text }) }
+  function changeMode(m) { send({ type: 'set_mode', mode: m }) }
   function confirm(pendingId, approve) { send({ type: 'confirm', pending_id: pendingId, approve }) }
 
   const clearReply = useCallback(() => setReply(null), [])

@@ -1,16 +1,10 @@
-import { useEffect, useState } from 'react'
+import { useNow } from '../useNow'
 
 function Clock() {
-  const [now, setNow] = useState(new Date())
-
-  useEffect(() => {
-    const timer = setInterval(() => setNow(new Date()), 1000)
-    return () => clearInterval(timer)
-  }, [])
-
+  const now = useNow()
   return (
     <span className="font-mono text-3xl">
-      {now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+      {now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false })}
     </span>
   )
 }
