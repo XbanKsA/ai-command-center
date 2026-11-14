@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useCallback, useState } from 'react'
 import { useKeys } from './useKeys'
 import KeyEditor from './components/KeyEditor'
 import ReplyToast from './components/ReplyToast'
@@ -11,11 +11,23 @@ import ModeToggle from './components/ModeToggle'
 import { useIdle } from './useIdle'
 import AlwaysOn from './components/AlwaysOn'
 import ChatScreen from './components/ChatScreen'
+import ConnectScreen from './components/ConnectScreen'
 
 const AOD_AFTER_MS = 60 * 1000 // 60 seconds
 
 function App() {
-        const { status, telemetry, error, sendPin, launch, ask, confirm, reply, clearReply, apps, searchApps, mode, changeMode, messages, sendVoice } = useJarvis()
+  const [host, setHost] = useState(() => localStorage.getItem('jarvis_host'))
+
+  const saveHost = useCallback((h) => {
+    localStorage.setItem('jarvis_host', h)
+    setHost(h)
+  }, [])
+
+  function forgetHost() {
+    localStorage.removeItem('jarvis_host')
+    setHost(null)
+  }
+        const { status, telemetry, error, sendPin, launch, ask, confirm, reply, clearReply, apps, searchApps, mode, changeMode, messages, sendVoice } = useJarvis(host)
     function runKey(k) {
       if (k.action.type === 'launch') launch(k.action.target)
       else ask(k.action.text)
@@ -30,16 +42,23 @@ function App() {
     const [editing, setEditing] = useState(null)
     const [chatOpen, setChatOpen] = useState(false)
     const idle = useIdle(AOD_AFTER_MS)
+    if (!host) return <ConnectScreen onFound={saveHost} />
 
   if (status === 'need_pin') return <PinScreen onSubmit={sendPin} error={error} />
 
   if (status === 'offline' || status === 'connecting') {
     return (
-      <div className="h-screen bg-black flex items-center justify-center">
+      <div className="h-screen bg-black flex flex-col gap-6 items-center justify-center">
         <div dir="rtl" className="rounded-3xl border border-red-900 bg-red-950/40 p-10 text-center">
           <h1 className="text-3xl font-bold text-red-300">تعذر الاتصال بالسيرفر! ⚠️</h1>
           <p className="mt-3 text-lg text-red-100/80">تأكد أن كلا الجهازين متصلان بنفس شبكة الـ Wi-Fi.</p>
         </div>
+        <button
+          onClick={forgetHost}
+          className="rounded-xl border border-cyan-800 px-6 py-3 text-cyan-300"
+        >
+          Search again
+        </button>
       </div>
     )
   }

@@ -1,10 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 
-const HOST = 'localhost:8765' // later: found automatically on Wi-Fi
-const SERVER = `ws://${HOST}/ws` // later: found automatically on Wi-Fi
-const HTTP = `http://${HOST}`
-
-export function useJarvis() {
+export function useJarvis(host) { 
   const [status, setStatus] = useState('connecting') // connecting , need_pin , connected , offline
   const [telemetry, setTelemetry] = useState(null)
   const [error, setError] = useState('')
@@ -20,13 +16,13 @@ export function useJarvis() {
   }, [])
 
   useEffect(() => {
+    if (!host) return
     let closedByUs = false
     let retryTimer
 
     function connect() {
-      const ws = new WebSocket(SERVER)
+      const ws = new WebSocket(`ws://${host}/ws`)
       socketRef.current = ws
-
       ws.onmessage = (event) => {
         const msg = JSON.parse(event.data)
 
@@ -52,7 +48,6 @@ export function useJarvis() {
           addMessage({ from: 'jarvis', text: msg.reply, pendingId: msg.pending_id })
         setReply({ text: msg.reply, status: msg.status, pendingId: msg.pending_id })
         } else if (msg.type === 'launch_result') {
-        setReply({ text: msg.message, status: msg.ok ? 'done' : 'failed' })
         } else if (msg.type === 'apps') {
           setApps(msg.apps)
         } else if (msg.type === 'mode') {
@@ -76,7 +71,7 @@ export function useJarvis() {
       clearTimeout(retryTimer)
       socketRef.current?.close()
     }
-  }, [addMessage])
+  }, [host, addMessage])
 
   function send(data) {
     const ws = socketRef.current
@@ -96,7 +91,7 @@ export function useJarvis() {
   }
     async function sendVoice(blob) {
     try {
-      const res = await fetch(`${HTTP}/api/voice`, {
+      const res = await fetch(`http://${host}/api/voice`, {
         method: 'POST',
         headers: {
           Authorization: `Bearer ${localStorage.getItem('jarvis_token')}`,
@@ -123,5 +118,5 @@ export function useJarvis() {
   if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'list_apps', query }))
 }, [])
 
-    return { status, telemetry, error, sendPin, launch, ask, confirm, reply, clearReply, apps, searchApps, sendVoice, messages,}
+      return { status, telemetry, error, sendPin, launch, ask, confirm, reply, clearReply, apps, searchApps, mode, changeMode, messages, sendVoice }
 }

@@ -1,0 +1,9 @@
+{
+  "appId": "com.aicommandcenter.tablet",
+  "appName": "AI Command Center",
+  "webDir": "dist",
+  "server": {
+    "androidScheme": "http",
+    "cleartext": true
+  }
+}

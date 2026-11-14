@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">AI Command Center</string>
+    <string name="title_activity_main">AI Command Center</string>
+    <string name="package_name">com.aicommandcenter.tablet</string>
+    <string name="custom_url_scheme">com.aicommandcenter.tablet</string>
+</resources>
