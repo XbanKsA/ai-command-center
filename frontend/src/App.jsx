@@ -10,11 +10,12 @@ import Key from './components/Key'
 import ModeToggle from './components/ModeToggle'
 import { useIdle } from './useIdle'
 import AlwaysOn from './components/AlwaysOn'
+import ChatScreen from './components/ChatScreen'
 
 const AOD_AFTER_MS = 60 * 1000 // 60 seconds
 
 function App() {
-        const { status, telemetry, error, sendPin, launch, ask, confirm, reply, clearReply, apps, searchApps, mode, changeMode } = useJarvis()
+        const { status, telemetry, error, sendPin, launch, ask, confirm, reply, clearReply, apps, searchApps, mode, changeMode, messages, sendVoice } = useJarvis()
     function runKey(k) {
       if (k.action.type === 'launch') launch(k.action.target)
       else ask(k.action.text)
@@ -27,6 +28,7 @@ function App() {
     const { slots, saveKey, deleteKey } = useKeys()
     const [editMode, setEditMode] = useState(false)
     const [editing, setEditing] = useState(null)
+    const [chatOpen, setChatOpen] = useState(false)
     const idle = useIdle(AOD_AFTER_MS)
 
   if (status === 'need_pin') return <PinScreen onSubmit={sendPin} error={error} />
@@ -50,6 +52,9 @@ function App() {
            <Stats t={telemetry} />
                       <div className="flex items-center gap-4">
                         <ModeToggle mode={mode} onChange={changeMode} />
+                                     <button onClick={() => setChatOpen(true)} className="h-10 rounded-xl bg-cyan-400 px-4 font-bold text-black">
+               Ask JARVIS
+             </button>
              <button
                onClick={() => setEditMode(!editMode)}
                className={`h-10 rounded-xl border px-4 ${editMode ? 'border-amber-400 bg-amber-400 font-bold text-black' : 'border-slate-700 text-slate-300'}`}
@@ -76,6 +81,15 @@ function App() {
         )}
       </main>
       <ReplyToast reply={reply} onClose={clearReply} onConfirm={confirm} />
+            {chatOpen && (
+        <ChatScreen
+          messages={messages}
+          onSend={ask}
+          onVoice={sendVoice}
+          onConfirm={confirm}
+          onClose={() => setChatOpen(false)}
+        />
+      )}
       {idle && <AlwaysOn telemetry={telemetry} mode={mode} />}
             {editing !== null && (
         <KeyEditor

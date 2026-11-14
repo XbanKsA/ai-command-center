@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 
-const SERVER = 'ws://localhost:8765/ws' // later: found automatically on Wi-Fi
+const HOST = 'localhost:8765' // later: found automatically on Wi-Fi
+const SERVER = `ws://${HOST}/ws` // later: found automatically on Wi-Fi
+const HTTP = `http://${HOST}`
 
 export function useJarvis() {
   const [status, setStatus] = useState('connecting') // connecting , need_pin , connected , offline
@@ -10,6 +12,12 @@ export function useJarvis() {
   const [apps, setApps] = useState([])
   const [mode, setModeInfo] = useState(null)
   const socketRef = useRef(null)
+  const [messages, setMessages] = useState([])
+
+  const addMessage = useCallback((m) => {
+    const id = `${Date.now()}-${Math.random()}`
+    setMessages((prev) => [...prev, { id, ...m }].slice(-50))
+  }, [])
 
   useEffect(() => {
     let closedByUs = false
@@ -35,7 +43,13 @@ export function useJarvis() {
           if (msg.reason === 'invalid_pin') setError('Wrong PIN, try again.')
           if (msg.reason === 'locked_out') setError(`Too many wrong PINs. Wait ${msg.retry_after} seconds.`)
           setStatus('need_pin') 
-        } else if (msg.type === 'jarvis_reply' || msg.type === 'jarvis_event') {
+        } else if (msg.type === 'jarvis_reply') {
+          setReply({ text: msg.reply, status: msg.status, pendingId: msg.pending_id })
+          addMessage({ from: 'jarvis', text: msg.reply, pendingId: msg.pending_id })
+        } else if (msg.type === 'jarvis_event') {
+          setReply({ text: msg.reply, status: msg.status, pendingId: msg.pending_id })
+          addMessage({ from: 'pc', text: msg.user_text })
+          addMessage({ from: 'jarvis', text: msg.reply, pendingId: msg.pending_id })
         setReply({ text: msg.reply, status: msg.status, pendingId: msg.pending_id })
         } else if (msg.type === 'launch_result') {
         setReply({ text: msg.message, status: msg.ok ? 'done' : 'failed' })
@@ -62,7 +76,7 @@ export function useJarvis() {
       clearTimeout(retryTimer)
       socketRef.current?.close()
     }
-  }, [])
+  }, [addMessage])
 
   function send(data) {
     const ws = socketRef.current
@@ -71,9 +85,37 @@ export function useJarvis() {
 
   function sendPin(pin) { send({ type: 'auth', pin, device_name: 'Tablet app' }) }
   function launch(target) { send({ type: 'launch', target }) }
-  function ask(text) { send({ type: 'chat', text }) }
+  function ask(text) {
+    addMessage({ from: 'me', text })
+    send({ type: 'chat', text })
+  }
   function changeMode(m) { send({ type: 'set_mode', mode: m }) }
-  function confirm(pendingId, approve) { send({ type: 'confirm', pending_id: pendingId, approve }) }
+  function confirm(pendingId, approve) {
+    setMessages((prev) => prev.map((m) => (m.pendingId === pendingId ? { ...m, pendingId: null } : m)))
+    send({ type: 'confirm', pending_id: pendingId, approve })
+  }
+    async function sendVoice(blob) {
+    try {
+      const res = await fetch(`${HTTP}/api/voice`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${localStorage.getItem('jarvis_token')}`,
+          'Content-Type': blob.type,
+        },
+        body: blob,
+      })
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      const data = await res.json()
+      if (!data.transcript) {
+        addMessage({ from: 'jarvis', text: "I didn't catch anything. Try again?" })
+        return
+      }
+      addMessage({ from: 'me', text: data.transcript })
+      addMessage({ from: 'jarvis', text: data.reply.reply, pendingId: data.reply.pending_id })
+    } catch (err) {
+      addMessage({ from: 'jarvis', text: `Voice failed: ${err.message}` })
+    }
+  }
 
   const clearReply = useCallback(() => setReply(null), [])
   const searchApps = useCallback((query) => {
@@ -81,5 +123,5 @@ export function useJarvis() {
   if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'list_apps', query }))
 }, [])
 
-    return { status, telemetry, error, sendPin, launch, ask, confirm, reply, clearReply, apps, searchApps }
+    return { status, telemetry, error, sendPin, launch, ask, confirm, reply, clearReply, apps, searchApps, sendVoice, messages,}
 }
