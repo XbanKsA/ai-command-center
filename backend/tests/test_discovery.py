@@ -58,3 +58,20 @@ async def test_announce_loop_runs(free_udp_port):
     await asyncio.sleep(0.35)
     await svc.stop()
     assert svc.announcements_sent >= 2
+
+
+async def test_legacy_probe_id_still_answered(free_udp_port):
+    """App builds from before the Kageon rename probe with "ai-command-center"; they must still find the PC."""
+    svc = DiscoveryService(free_udp_port, server_port=8765, server_name="OLD-APP", interval=60)
+    await svc.start()
+    try:
+        loop = asyncio.get_running_loop()
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.setblocking(False)
+        sock.bind(("127.0.0.1", 0))
+        sock.sendto(json.dumps({"service": "ai-command-center", "type": "probe"}).encode(), ("127.0.0.1", free_udp_port))
+        reply = json.loads(await asyncio.wait_for(loop.sock_recv(sock, 4096), 3))
+        assert reply["type"] == "probe_reply" and reply["service"] == "ai-command-center"
+        sock.close()
+    finally:
+        await svc.stop()

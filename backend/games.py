@@ -1,5 +1,5 @@
 """
-Detect a running game by its program, so JARVIS can switch to gaming mode the moment a game
+Detect a running game by its program, so Kageon can switch to gaming mode the moment a game
 starts -- before it has loaded much into VRAM. (Many games, Deadlock included, size their VRAM
 use to whatever is free, so VRAM alone reacts late.)
 

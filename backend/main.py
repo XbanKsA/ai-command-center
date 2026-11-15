@@ -1,5 +1,5 @@
 """
-AI COMMAND CENTER -- JARVIS Core (PC backend)
+KAGEON -- PC backend
 
 Run:   python main.py
 Then:  read the 4-digit PIN printed in the terminal and enter it on the tablet.
@@ -11,15 +11,15 @@ WebSocket protocol (ws://<pc-ip>:8765/ws) -- all messages are JSON objects with 
   {"type":"auth","pin":"1234","device_name":"Tab"}   {"type":"auth_ok","token":"...","server_name":..}
   {"type":"auth","token":"<saved token>"}            {"type":"auth_error","reason":..,"retry_after":..}
   {"type":"ping"}                                    {"type":"pong"}
-  {"type":"chat","text":"open spotify","request_id":"x"}  {"type":"jarvis_reply","request_id":"x", ...}
-  {"type":"confirm","pending_id":"..","approve":true,"choice":0}   {"type":"jarvis_reply", ...}
+  {"type":"chat","text":"open spotify","request_id":"x"}  {"type":"assistant_reply","request_id":"x", ...}
+  {"type":"confirm","pending_id":"..","approve":true,"choice":0}   {"type":"assistant_reply", ...}
   {"type":"launch","target":"C:\\\\Games\\\\x.exe","request_id":"y"}  {"type":"launch_result", ...}
   {"type":"get_telemetry"} / {"type":"get_status"}   {"type":"telemetry", ...} / {"type":"status", ...}
   {"type":"list_apps","query":"chr"}                 {"type":"apps","apps":[...]}
   {"type":"get_mode"}                                {"type":"mode","label":"qwen3.5:4b, Gaming mode (auto)",...}
   {"type":"set_mode","mode":"auto|gaming|normal"}    {"type":"mode", ...}   (also pushed on every change)
                                                      {"type":"telemetry", ...}   (pushed every 1.5 s)
-                                                     {"type":"jarvis_event", ...} (PC voice activity)
+                                                     {"type":"assistant_event", ...} (PC voice activity)
 """
 from __future__ import annotations
 
@@ -35,13 +35,13 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 
 from auth import AuthError, AuthManager
-from config import SERVICE_ID, VERSION, Settings, get_settings
+from config import SERVICE_ID, VERSION, Settings, get_settings, resolve_wake_model
 from discovery import DiscoveryService, build_announcement, get_lan_ips
 from executor import AppIndex, Executor
 from games import GameDetector
 from hotkey import GlobalHotkey
 from hub import Client, Hub
-from jarvis import Jarvis
+from assistant import Assistant
 from llm import OllamaClient
 from memory import MemoryStore
 from modes import ModeManager
@@ -69,7 +69,7 @@ def print_banner(s: Settings, pin: str, ollama: dict, gpu: str | None, hotkey: G
     ips = get_lan_ips()
     line = "=" * 60
     spaced_pin = "  ".join(pin)
-    print(f"\n{line}\n   AI COMMAND CENTER  //  JARVIS CORE v{VERSION}\n{line}")
+    print(f"\n{line}\n   KAGEON  //  CORE v{VERSION}\n{line}")
     print(f"   PIN ACCESS CODE :   {spaced_pin}")
     print(f"{line}")
     for ip in ips:
@@ -94,9 +94,14 @@ def print_banner(s: Settings, pin: str, ollama: dict, gpu: str | None, hotkey: G
         else:
             print(f"   Mode            :   {modes.requested.upper()} (manual - say 'auto mode' to switch back)")
     print(f"   GPU telemetry   :   {gpu or 'not available'}")
-    print(f"   Voice           :   {'ON (say: Hey Jarvis)' if s.voice_enabled else 'OFF'}")
+    if not s.voice_enabled:
+        voice_line = "OFF"
+    else:
+        _, phrase, custom = resolve_wake_model(s.wake_word_model)
+        voice_line = f"ON (say: {phrase})" if custom else f"ON (say: {phrase} -- temporary until Hey Kageon is trained)"
+    print(f"   Voice           :   {voice_line}")
     if hotkey is not None:
-        hk = f"{s.quit_hotkey.upper()} = quit JARVIS" if hotkey.active else f"off ({hotkey.error})"
+        hk = f"{s.quit_hotkey.upper()} = quit Kageon" if hotkey.active else f"off ({hotkey.error})"
         print(f"   Quit shortcut   :   {hk}")
     if s.dry_run:
         print("   DRY RUN         :   ON (actions are only logged)")
@@ -109,7 +114,7 @@ class State:
     telemetry: TelemetryCollector
     executor: Executor
     llm: OllamaClient
-    jarvis: Jarvis
+    assistant: Assistant
     hub: Hub
     voice: VoiceEngine
     discovery: DiscoveryService | None = None
@@ -139,7 +144,7 @@ def create_app(settings: Settings | None = None, llm: OllamaClient | None = None
         st.llm = llm or OllamaClient(settings.ollama_url, settings.model_normal, settings.ollama_timeout,
                                      settings.ollama_keep_alive, settings.think_default, settings.think_timeout)
         st.hub = Hub()
-        st.voice = VoiceEngine(settings, loop, on_command=lambda text: st.jarvis.handle_text(text, "voice"),
+        st.voice = VoiceEngine(settings, loop, on_command=lambda text: st.assistant.handle_text(text, "voice"),
                                vram_reader=st.telemetry.vram_info)
 
         async def push_mode(state: dict):
@@ -150,14 +155,14 @@ def create_app(settings: Settings | None = None, llm: OllamaClient | None = None
                                busy=lambda: bool(st.voice.status.get("busy")),
                                game_detector=GameDetector(settings.game_processes, settings.game_ignore)
                                if settings.game_detection else None)
-        st.jarvis = Jarvis(st.llm, st.executor, st.telemetry, settings.confirm_timeout,
+        st.assistant = Assistant(st.llm, st.executor, st.telemetry, settings.confirm_timeout,
                            fast_commands=settings.fast_commands, modes=st.modes, memory=st.memory,
                            screen_max_side=settings.screen_max_side, max_memory_facts=settings.memory_max_facts)
 
         async def push_voice_events(resp: dict):
             if resp.get("source") == "voice":
-                await st.hub.broadcast({"type": "jarvis_event", **resp})
-        st.jarvis.add_listener(push_voice_events)
+                await st.hub.broadcast({"type": "assistant_event", **resp})
+        st.assistant.add_listener(push_voice_events)
 
         st.tasks.append(asyncio.create_task(asyncio.to_thread(st.executor.apps.refresh)))
         st.tasks.append(asyncio.create_task(telemetry_loop()))
@@ -178,7 +183,7 @@ def create_app(settings: Settings | None = None, llm: OllamaClient | None = None
             st.tasks.append(asyncio.create_task(st.modes.start()))
             if settings.quit_hotkey.strip() and on_quit:
                 def quit_now():
-                    log.info("Quit shortcut pressed -- shutting JARVIS down")
+                    log.info("Quit shortcut pressed -- shutting Kageon down")
                     on_quit()
                 st.hotkey = GlobalHotkey(settings.quit_hotkey, quit_now)
                 st.hotkey.start()
@@ -209,7 +214,7 @@ def create_app(settings: Settings | None = None, llm: OllamaClient | None = None
                 log.debug("telemetry loop: %s", exc)
             await asyncio.sleep(settings.telemetry_interval)
 
-    app = FastAPI(title="AI Command Center - JARVIS Core", version=VERSION, lifespan=lifespan)
+    app = FastAPI(title="Kageon Core", version=VERSION, lifespan=lifespan)
     app.state.core = st
     app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
@@ -278,12 +283,12 @@ def create_app(settings: Settings | None = None, llm: OllamaClient | None = None
     @app.post("/api/chat")
     async def chat(request: Request, _=Depends(require_token)):
         body = await request.json()
-        return await st.jarvis.handle_text(str(body.get("text", "")), "tablet")
+        return await st.assistant.handle_text(str(body.get("text", "")), "tablet")
 
     @app.post("/api/confirm")
     async def confirm(request: Request, _=Depends(require_token)):
         b = await request.json()
-        return await st.jarvis.confirm(str(b.get("pending_id", "")), bool(b.get("approve")), "tablet", b.get("choice"))
+        return await st.assistant.confirm(str(b.get("pending_id", "")), bool(b.get("approve")), "tablet", b.get("choice"))
 
     @app.post("/api/launch")
     async def launch(request: Request, _=Depends(require_token)):
@@ -348,7 +353,7 @@ def create_app(settings: Settings | None = None, llm: OllamaClient | None = None
 
     @app.post("/api/voice")
     async def voice_upload(request: Request, _=Depends(require_token)):
-        """Push-to-talk from the tablet: raw audio body (webm/ogg/wav/mp3...) -> transcript -> JARVIS."""
+        """Push-to-talk from the tablet: raw audio body (webm/ogg/wav/mp3...) -> transcript -> Kageon."""
         audio = await request.body()
         if not audio:
             raise HTTPException(400, "Empty audio body")
@@ -358,7 +363,7 @@ def create_app(settings: Settings | None = None, llm: OllamaClient | None = None
             raise HTTPException(500, f"Speech recognition failed: {exc}")
         if not text:
             return {"transcript": "", "language": lang, "reply": None}
-        return {"transcript": text, "language": lang, "reply": await st.jarvis.handle_text(text, "tablet_voice")}
+        return {"transcript": text, "language": lang, "reply": await st.assistant.handle_text(text, "tablet_voice")}
 
     @app.get("/api/tts")
     async def tts(text: str, _=Depends(require_token)):
@@ -430,12 +435,12 @@ def create_app(settings: Settings | None = None, llm: OllamaClient | None = None
             t.add_done_callback(pending_tasks.discard)
 
         async def do_chat(text: str, rid):
-            resp = await st.jarvis.handle_text(text, "tablet")
-            await st.hub.send(client, {"type": "jarvis_reply", "request_id": rid, **resp})
+            resp = await st.assistant.handle_text(text, "tablet")
+            await st.hub.send(client, {"type": "assistant_reply", "request_id": rid, **resp})
 
         async def do_confirm(pid: str, approve: bool, choice, rid):
-            resp = await st.jarvis.confirm(pid, approve, "tablet", choice)
-            await st.hub.send(client, {"type": "jarvis_reply", "request_id": rid, **resp})
+            resp = await st.assistant.confirm(pid, approve, "tablet", choice)
+            await st.hub.send(client, {"type": "assistant_reply", "request_id": rid, **resp})
 
         async def do_set_mode(mode: str, rid):
             try:
@@ -518,4 +523,4 @@ if __name__ == "__main__":
                              log_level=_settings.log_level, ws_ping_interval=20, ws_ping_timeout=20)
     _server = uvicorn.Server(_config)
     _server.run()
-    print("JARVIS stopped. Goodbye.")
+    print("Kageon stopped. Goodbye.")

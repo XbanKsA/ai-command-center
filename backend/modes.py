@@ -8,8 +8,8 @@ Auto mode switching between two Ollama models (only one in VRAM at a time).
 Requested mode: "auto" | "gaming" | "normal". A manual choice is remembered (even across restarts)
 until "auto" is set again.
 
-AUTO detection uses "free VRAM for others" = GPU free VRAM + VRAM held by JARVIS's own model
-(from Ollama /api/ps). Without that correction the 9B model would push JARVIS into gaming mode
+AUTO detection uses "free VRAM for others" = GPU free VRAM + VRAM held by Kageon's own model
+(from Ollama /api/ps). Without that correction the 9B model would push Kageon into gaming mode
 just by being loaded. Rules:
   * normal -> gaming  immediately when it drops below VRAM_GAMING_BELOW_GB (a game started)
   * gaming -> normal  only after it stays above VRAM_NORMAL_ABOVE_GB for NORMAL_AFTER_SECONDS
@@ -211,7 +211,7 @@ class ModeManager:
                 pass
         if unload and self.loaded_ok:
             if await self.llm.unload(self.model):
-                log.info("Unloaded %s from VRAM (JARVIS exiting)", self.model)
+                log.info("Unloaded %s from VRAM (Kageon exiting)", self.model)
 
     async def _loop(self) -> None:
         while True:
@@ -223,7 +223,7 @@ class ModeManager:
 
     # ------------------------------------------------------------------ measuring
     async def measure(self) -> float | None:
-        """Free VRAM in GB as if JARVIS's own model were unloaded. None if no NVIDIA GPU."""
+        """Free VRAM in GB as if Kageon's own model were unloaded. None if no NVIDIA GPU."""
         info = self.read_vram()
         if info is None:
             return None
@@ -252,7 +252,7 @@ class ModeManager:
             return
         game = await self.detect_game()
         if not initial and self.loaded_ok and self.busy() and not game:
-            return          # don't measure while JARVIS itself is busy using the GPU (short spikes)
+            return          # don't measure while Kageon itself is busy using the GPU (short spikes)
         free = await self.measure()
         if free is None and self.gpu_available:
             self.gpu_available = False
@@ -351,7 +351,7 @@ class ModeManager:
                 installed = set(await self.llm.installed_models())
             except Exception:
                 if not self._warned_offline:
-                    log.warning("Ollama is not reachable yet - JARVIS will load the %s model when it starts",
+                    log.warning("Ollama is not reachable yet - Kageon will load the %s model when it starts",
                                 profile)
                     self._warned_offline = True
                 self.active, self.loaded_ok = profile, False

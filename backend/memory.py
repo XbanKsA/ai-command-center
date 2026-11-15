@@ -1,5 +1,5 @@
 """
-JARVIS long-term memory -- everything stays on this PC in backend/data/memory.db (SQLite).
+Kageon long-term memory -- everything stays on this PC in backend/data/memory.db (SQLite).
 
   facts          "remember that my games are on D:\\Games"   -> used automatically in later answers
   conversations  every exchange is logged -> context survives restarts, "what did we talk about yesterday?"
@@ -25,7 +25,7 @@ _STOP = {"the", "a", "an", "my", "is", "are", "was", "were", "am", "to", "of", "
          "would", "should", "where", "when", "why", "how", "who", "which", "there", "here", "now", "just", "also",
          "talk", "talked", "talking", "say", "said", "ask", "asked", "discuss", "discussed", "yesterday", "today",
          "earlier", "last", "time", "thing", "things", "something", "anything", "any", "some", "get", "got",
-         "installed", "saved", "again", "jarvis", "hey"}
+         "installed", "saved", "again", "kageon", "hey"}
 
 
 def _norm(text: str) -> str:

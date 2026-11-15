@@ -1,8 +1,8 @@
 """
 Voice pipeline (runs entirely on the PC, works with the tablet off):
 
-  mic --> openWakeWord ("Hey Jarvis") --> record until silence --> faster-whisper (STT)
-      --> JARVIS agent --> edge-tts (speech) --> speakers
+  mic --> openWakeWord ("Hey Kageon") --> record until silence --> faster-whisper (STT)
+      --> Kageon assistant --> edge-tts (speech) --> speakers
 
 All heavy libraries are imported lazily so the server still starts (voice disabled)
 if a voice dependency, the microphone, or the internet (edge-tts) is missing.
@@ -16,6 +16,8 @@ import re
 import threading
 import time
 from typing import Awaitable, Callable
+
+from config import FALLBACK_WAKE_MODEL, resolve_wake_model
 
 log = logging.getLogger("voice")
 
@@ -231,6 +233,7 @@ class VoiceEngine:
         self._thread: threading.Thread | None = None
         self._vad = None
         self._speak_lock = threading.Lock()
+        self.wake_phrase = resolve_wake_model(settings.wake_word_model)[1]
 
     # ---------------------------------------------------------------- lifecycle
     def start(self) -> None:
@@ -282,12 +285,20 @@ class VoiceEngine:
             log.error("Voice disabled -- missing packages: %s", exc)
             return
 
+        model, self.wake_phrase, custom = resolve_wake_model(self.s.wake_word_model)
+        if custom:
+            log.info("Wake word: custom model %s", model)
+        else:
+            if model == FALLBACK_WAKE_MODEL:
+                log.warning("Custom 'Hey Kageon' wake word not trained yet (models/hey_kageon.onnx missing) -- "
+                            "using the temporary built-in phrase '%s'", self.wake_phrase)
+            try:
+                download_models([model])   # built-in models only; no-op when already downloaded
+            except Exception as exc:
+                log.warning("Could not download wake-word model (%s); trying local copy", exc)
+        self.status["wake_phrase"] = self.wake_phrase
         try:
-            download_models([self.s.wake_word_model])   # no-op when already downloaded
-        except Exception as exc:
-            log.warning("Could not download wake-word model (%s); trying local copy", exc)
-        try:
-            oww = Model(wakeword_models=[self.s.wake_word_model], inference_framework="onnx")
+            oww = Model(wakeword_models=[model], inference_framework="onnx")
         except Exception as exc:
             self.status["wake_word"] = f"error: {exc}"
             log.error("Wake word model failed to load: %s", exc)
@@ -308,7 +319,7 @@ class VoiceEngine:
                 with sd.InputStream(samplerate=SAMPLE_RATE, channels=1, dtype="int16",
                                     blocksize=CHUNK, device=self._mic_device()) as stream:
                     self.status.update(wake_word="listening", listening=True)
-                    log.info("Voice ready -- say 'Hey Jarvis' (mic: %s)", sd.query_devices(stream.device)["name"])
+                    log.info("Voice ready -- say '%s' (mic: %s)", self.wake_phrase, sd.query_devices(stream.device)["name"])
                     while not self._stop.is_set():
                         chunk, _ = stream.read(CHUNK)
                         samples = chunk[:, 0]
@@ -394,7 +405,7 @@ class VoiceEngine:
                 synth = 0.0
                 if self.s.speak_responses and resp.get("reply"):
                     synth = self.speak(resp["reply"])
-                log.info("Timing: you spoke %.1fs | speech-to-text %.2fs (%s) | JARVIS %.2fs (%s) | voice %.2fs | "
+                log.info("Timing: you spoke %.1fs | speech-to-text %.2fs (%s) | Kageon %.2fs (%s) | voice %.2fs | "
                          "reply started %.1fs after you stopped talking",
                          t1 - t0, t2 - t1, self.stt.device, t3 - t2, resp.get("via", "?"), synth,
                          (t2 - t1) + (t3 - t2) + synth + self.s.end_silence_ms / 1000)

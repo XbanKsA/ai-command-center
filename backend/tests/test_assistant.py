@@ -1,7 +1,7 @@
 
 import pytest
 
-from jarvis import Jarvis, detect_lang
+from assistant import Assistant, detect_lang
 from telemetry import TelemetryCollector
 from tests.conftest import FakeLLM
 
@@ -14,7 +14,7 @@ def intent(i, target="", reply="", conf=0.95, browser=""):
 def make(dry_executor):
     def _make(rules=None, fail=None):
         llm = FakeLLM(rules, fail)
-        return Jarvis(llm, dry_executor, TelemetryCollector(), confirm_timeout=60), llm
+        return Assistant(llm, dry_executor, TelemetryCollector(), confirm_timeout=60), llm
     return _make
 
 
@@ -283,7 +283,7 @@ async def test_speech_without_commas(make):
     ("Yes.", True), ("yes close it", True), ("Yeah do it", True), ("No, don't.", False), ("yes don't", None),
     ("open notepad", None), ("لا", False), ("نعم", True), ("", None)])
 def test_yes_or_no(text, expected):
-    from jarvis import yes_or_no
+    from assistant import yes_or_no
     assert yes_or_no(text) is expected
 
 
@@ -372,7 +372,7 @@ async def test_thinking_only_when_asked(jm):
 
 
 def test_compact_mode_words():
-    from jarvis import detect_mode_command
+    from assistant import detect_mode_command
     assert detect_mode_command("swap to automode") == "auto"
     assert detect_mode_command("Normalmode please") == "normal"
 
@@ -423,7 +423,7 @@ async def test_plain_play_is_still_media_key_and_google_default(make):
 # ---------------------------------------------------------------- screen
 
 async def test_screen_question_sends_screenshot(make, monkeypatch):
-    import jarvis as jmod
+    import assistant as jmod
     monkeypatch.setattr(jmod, "capture_screen", lambda max_side: "BASE64IMAGE")
     j, llm = make({"on my screen": "You have **VS Code** open with a SyntaxError on line 12."})
     r = await j.handle_text("Can you see what's on my screen?")
@@ -434,7 +434,7 @@ async def test_screen_question_sends_screenshot(make, monkeypatch):
 
 
 async def test_screen_without_vision_model_or_pillow(make, monkeypatch):
-    import jarvis as jmod
+    import assistant as jmod
     from screen import ScreenError
     j, llm = make()
     llm.model = "qwen2.5-coder:3b"
@@ -464,7 +464,7 @@ def jmem(dry_executor, tmp_path):
 
     def _make(rules=None):
         llm = FakeLLM(rules)
-        return Jarvis(llm, dry_executor, TelemetryCollector(), memory=mem), llm
+        return Assistant(llm, dry_executor, TelemetryCollector(), memory=mem), llm
     yield _make, mem
     mem.close()
 
@@ -573,3 +573,11 @@ async def test_routine_needs_steps(jmem):
                                   "steps": [], "reply": "", "confidence": 0.9}})
     r = await j.handle_text("when I say movie night")
     assert r["status"] == "needs_clarification" and mem.routines() == []
+
+
+def test_wake_name_is_stripped_from_commands():
+    from assistant import OPEN_RE, REMEMBER_RE
+    for said in ("hey kageon open notepad", "kageon open notepad", "hey kage on open notepad", "open notepad"):
+        m = OPEN_RE.match(said)
+        assert m and m.group("t") == "notepad", said
+    assert REMEMBER_RE.match("hey kageon remember that my desk is white").group("t") == "my desk is white"

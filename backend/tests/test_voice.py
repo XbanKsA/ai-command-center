@@ -121,3 +121,22 @@ def test_speech_language_setting():
     assert s.speech_language == "ar"          # explicit setting wins
     eng = VoiceEngine(Settings(), asyncio.new_event_loop(), on_command=None)
     assert eng.stt.language == "en"            # default: English only
+
+
+def test_wake_model_falls_back_until_kageon_is_trained(tmp_path, monkeypatch):
+    import config
+    monkeypatch.setattr(config, "CUSTOM_WAKE_MODEL", tmp_path / "hey_kageon.onnx")
+    for setting in ("auto", "", "hey_jarvis"):          # old .env files still say hey_jarvis
+        model, phrase, custom = config.resolve_wake_model(setting)
+        assert (model, custom) == (config.FALLBACK_WAKE_MODEL, False)
+    (tmp_path / "hey_kageon.onnx").write_bytes(b"x")
+    model, phrase, custom = config.resolve_wake_model("auto")
+    assert model.endswith("hey_kageon.onnx") and phrase == "Hey Kageon" and custom
+
+
+def test_wake_model_explicit_values(tmp_path):
+    import config
+    f = tmp_path / "hey_shadow.onnx"
+    model, phrase, custom = config.resolve_wake_model(str(f))
+    assert model == str(f) and phrase == "Hey Shadow" and custom
+    assert config.resolve_wake_model("alexa") == ("alexa", "Alexa", False)

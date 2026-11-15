@@ -1,5 +1,5 @@
 """
-JARVIS agent: natural language -> structured intent -> safe execution.
+Kageon assistant: natural language -> structured intent -> safe execution.
 
 Speed:
   * Simple, unambiguous commands ("open notepad", "open youtube in chrome", "close spotify",
@@ -30,7 +30,7 @@ from memory import MemoryStore, time_window
 from screen import ScreenError, capture_screen, clean_for_speech, is_screen_question
 from telemetry import TelemetryCollector
 
-log = logging.getLogger("jarvis")
+log = logging.getLogger("assistant")
 
 INTENTS = [
     "chat", "open_app", "close_app", "open_url", "web_search", "media_control", "system_stats",
@@ -54,7 +54,7 @@ INTENT_SCHEMA = {
     "required": ["intent", "target", "browser", "site", "steps", "reply", "confidence"],
 }
 
-SYSTEM_PROMPT = f"""You are JARVIS, a concise, witty, helpful AI assistant that controls a Windows PC.
+SYSTEM_PROMPT = f"""You are Kageon, a concise, witty, helpful AI assistant that controls a Windows PC.
 Convert every user message into ONE JSON object: {{"intent", "target", "browser", "site", "steps", "reply", "confidence"}}.
 
 Intents:
@@ -232,7 +232,9 @@ def yes_or_no(text: str) -> bool | None:
 
 # ------------------------------------------------------------------ fast local command rules
 
-_WAKE_PREFIX = r"^(?:(?:hey|hi|ok|okay|yo)\s+)?(?:jarvis\s+)?(?:(?:هاي|يا)\s+)?(?:جارفس\s+)?"
+# "Kageon" plus the ways speech-to-text tends to spell it
+WAKE_NAMES = r"(?:kageon|kagion|kagyon|kage\s+on|cage\s+on|kegon|kaigon)"
+_WAKE_PREFIX = r"^(?:(?:hey|hi|ok|okay|yo)\s+)?(?:" + WAKE_NAMES + r"\s+)?(?:(?:هاي|يا)\s+)?(?:كاجيون\s+)?"
 _POLITE = r"(?:please\s+|can you\s+|could you\s+|would you\s+|لو سمحت\s+|ممكن\s+)?"
 OPEN_RE = re.compile(_WAKE_PREFIX + _POLITE + r"(?:open|launch|start|run|go to|افتح|افتحي|افتحلي|شغل|شغلي|شغّل|ودني)"
                      r"\s+(?:لي\s+|up\s+)?(?P<t>.+?)(?:\s+please|\s+لو سمحت)?$")
@@ -315,9 +317,9 @@ _VIDEO_WORDS = re.compile(r"\b(videos?|songs?|music|trailers?|clips?|music video
 
 # ------------------------------------------------------------------ memory commands
 
-REMEMBER_RE = re.compile(r"^(?:(?:hey\s+)?jarvis\s+)?(?:please\s+)?(?:remember|don'?t forget|keep in mind|note)"
+REMEMBER_RE = re.compile(r"^(?:(?:hey\s+)?" + WAKE_NAMES + r"\s+)?(?:please\s+)?(?:remember|don'?t forget|keep in mind|note)"
                          r"\s+(?:that\s+)?(?P<t>.{3,})$", re.I)
-FORGET_RE = re.compile(r"^(?:(?:hey\s+)?jarvis\s+)?(?:please\s+)?forget\s+(?:about\s+)?(?P<t>.+)$", re.I)
+FORGET_RE = re.compile(r"^(?:(?:hey\s+)?" + WAKE_NAMES + r"\s+)?(?:please\s+)?forget\s+(?:about\s+)?(?P<t>.+)$", re.I)
 RECALL_RE = re.compile(r"^(?:what do you remember|what do you know about me|what have you (?:remembered|saved)|"
                        r"(?:list|show|tell me)(?: me)? (?:your|my|all) memories|what are my memories|"
                        r"what do you remember about (?P<t>.+)|what did i tell you about (?P<t2>.+))$", re.I)
@@ -402,7 +404,7 @@ class Pending:
 Listener = Callable[[dict], Awaitable[None]]
 
 
-class Jarvis:
+class Assistant:
     def __init__(self, llm: OllamaClient, executor: Executor, telemetry: TelemetryCollector,
                  confirm_timeout: int = 60, history_turns: int = 6, fast_commands: bool = True, modes=None,
                  memory: MemoryStore | None = None, screen_max_side: int = 1280, max_memory_facts: int = 20):
@@ -577,7 +579,7 @@ class Jarvis:
         except ScreenError as exc:
             return R(str(exc), "failed")
         messages = [
-            {"role": "system", "content": "You are JARVIS, a helpful assistant. You are looking at a screenshot of the "
+            {"role": "system", "content": "You are Kageon, a helpful assistant. You are looking at a screenshot of the "
              "user's Windows PC screen. Answer their question about it directly and concisely (2-4 short sentences, "
              "it will be spoken aloud). Read exact text (errors, titles, numbers) when relevant. No markdown."},
             *self._memory_context(question),
@@ -748,7 +750,7 @@ class Jarvis:
                                                     until=window[1] if window else None)
             if past:
                 lines = [f"[{time.strftime('%Y-%m-%d %H:%M', time.localtime(r['ts']))}] User: {r['user_text']} | "
-                         f"JARVIS: {r['reply']}" for r in past]
+                         f"Kageon: {r['reply']}" for r in past]
                 out.append({"role": "system", "content": "Earlier conversations (oldest first). Use them to answer "
                             "questions about what was said before:\n" + "\n".join(lines)})
         return out

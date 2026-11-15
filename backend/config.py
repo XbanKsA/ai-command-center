@@ -1,5 +1,5 @@
 """
-Central configuration for the AI Command Center backend.
+Central configuration for the Kageon backend.
 
 Values come from (highest priority first):
   1. Real environment variables
@@ -15,7 +15,34 @@ from pathlib import Path
 
 BACKEND_DIR = Path(__file__).resolve().parent
 VERSION = "1.0.0"
-SERVICE_ID = "ai-command-center"
+SERVICE_ID = "kageon"
+# Old discovery ID from before the rename - still answered so older app builds can find the PC
+LEGACY_SERVICE_IDS = ("ai-command-center",)
+
+# Wake word: our own "Hey Kageon" model, trained with openWakeWord (see models/README.md).
+CUSTOM_WAKE_MODEL = BACKEND_DIR / "models" / "hey_kageon.onnx"
+# Ready-made openWakeWord model used ONLY until hey_kageon.onnx exists (no built-in model exists for a new name).
+FALLBACK_WAKE_MODEL = "hey_jarvis"
+FALLBACK_WAKE_PHRASE = "Hey Jarvis"
+
+
+def resolve_wake_model(setting: str) -> tuple[str, str, bool]:
+    """WAKE_WORD_MODEL setting -> (model to load, phrase to say, is_custom_model).
+
+    "auto" (default) = models/hey_kageon.onnx when it exists, otherwise the temporary fallback.
+    Anything else = a path to an .onnx file or the name of a built-in openWakeWord model.
+    """
+    value = (setting or "").strip()
+    if value.lower() in ("", "auto", FALLBACK_WAKE_MODEL):   # old .env files still say hey_jarvis
+        if CUSTOM_WAKE_MODEL.exists():
+            return str(CUSTOM_WAKE_MODEL), "Hey Kageon", True
+        return FALLBACK_WAKE_MODEL, FALLBACK_WAKE_PHRASE, False
+    path = Path(value)
+    if not path.is_absolute():
+        path = BACKEND_DIR / path
+    if value.lower().endswith((".onnx", ".tflite")):
+        return str(path), "Hey " + path.stem.replace("hey_", "").replace("_", " ").title(), True
+    return value, value.replace("_", " ").title(), False
 
 
 def _load_dotenv(path: Path) -> dict[str, str]:
@@ -83,7 +110,7 @@ class Settings:
     ollama_timeout: float = field(default_factory=lambda: _get_float("OLLAMA_TIMEOUT", 60.0))
     # how long Ollama keeps the model in VRAM: -1 = forever (fastest replies), or e.g. 30m
     ollama_keep_alive: str = field(default_factory=lambda: _get("OLLAMA_KEEP_ALIVE", "-1"))
-    # free the model's VRAM when JARVIS exits
+    # free the model's VRAM when Kageon exits
     unload_on_exit: bool = field(default_factory=lambda: _get_bool("UNLOAD_ON_EXIT", True))
     # "thinking" makes replies smarter but much slower: off unless you say "think about it"
     think_default: bool = field(default_factory=lambda: _get_bool("THINK_DEFAULT", False))
@@ -91,7 +118,7 @@ class Settings:
 
     # --- Modes: auto | gaming | normal (a manual choice is remembered until you set auto again) ---
     mode_default: str = field(default_factory=lambda: _get("MODE_DEFAULT", "auto"))
-    # free VRAM is measured as if JARVIS's own model were NOT loaded (so it only reacts to games/apps)
+    # free VRAM is measured as if Kageon's own model were NOT loaded (so it only reacts to games/apps)
     # "auto" = based on how much VRAM the normal model really needs (measured) + VRAM_HEADROOM_GB.
     # Or set a fixed number of GB.
     vram_gaming_below_gb: str = field(default_factory=lambda: _get("VRAM_GAMING_BELOW_GB", "auto"))
@@ -114,12 +141,12 @@ class Settings:
         return self.model_normal
 
     # --- Execution ---
-    # DRY_RUN=true -> JARVIS only *logs* actions instead of launching/closing anything.
+    # DRY_RUN=true -> Kageon only *logs* actions instead of launching/closing anything.
     dry_run: bool = field(default_factory=lambda: _get_bool("DRY_RUN", False))
     confirm_timeout: int = field(default_factory=lambda: _get_int("CONFIRM_TIMEOUT", 60))
     # understand simple commands (open/close/volume/yes/no) instantly without asking the LLM
     fast_commands: bool = field(default_factory=lambda: _get_bool("FAST_COMMANDS", True))
-    # global keyboard shortcut that shuts JARVIS down (blank = disabled)
+    # global keyboard shortcut that shuts Kageon down (blank = disabled)
     quit_hotkey: str = field(default_factory=lambda: _get("QUIT_HOTKEY", "ctrl+shift+q"))
 
     # --- Memory (stays on this PC: data/memory.db) ---
@@ -132,10 +159,10 @@ class Settings:
 
     # --- Voice ---
     voice_enabled: bool = field(default_factory=lambda: _get_bool("VOICE_ENABLED", True))
-    wake_word_model: str = field(default_factory=lambda: _get("WAKE_WORD_MODEL", "hey_jarvis"))
+    wake_word_model: str = field(default_factory=lambda: _get("WAKE_WORD_MODEL", "auto"))
     wake_threshold: float = field(default_factory=lambda: _get_float("WAKE_THRESHOLD", 0.5))
     mic_device: str = field(default_factory=lambda: _get("MIC_DEVICE", ""))  # blank = Windows default mic
-    # silence (ms) after you stop talking before JARVIS starts processing
+    # silence (ms) after you stop talking before Kageon starts processing
     end_silence_ms: int = field(default_factory=lambda: _get_int("END_SILENCE_MS", 700))
     whisper_model: str = field(default_factory=lambda: _get("WHISPER_MODEL", "small"))
     whisper_device: str = field(default_factory=lambda: _get("WHISPER_DEVICE", "auto"))  # auto | cuda | cpu

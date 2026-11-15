@@ -52,14 +52,14 @@ def env(tmp_path):
 
 async def test_startup_normal_and_no_self_trigger(env):
     s, llm, gpu, clock, said, changes, make = env
-    llm.loaded["qwen2.5-coder:3b"] = 2.5          # left over from the old JARVIS version
+    llm.loaded["qwen2.5-coder:3b"] = 2.5          # left over from the old Kageon version
     m = make()
     await m.start()
     await m.stop(unload=False)
     assert m.active == "normal" and m.model == "qwen3.5:9b" and llm.model == "qwen3.5:9b"
     assert llm.loaded == {"qwen3.5:9b": 8.5}      # old model was unloaded
     assert said == []                              # no announcement at startup
-    # 9B now uses 8.5 GB -> raw free is only 2 GB, but JARVIS must NOT switch itself to gaming mode
+    # 9B now uses 8.5 GB -> raw free is only 2 GB, but Kageon must NOT switch itself to gaming mode
     for _ in range(5):
         clock.t += 5
         await m.poll_once()

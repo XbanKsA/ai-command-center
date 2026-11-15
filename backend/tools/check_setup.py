@@ -92,7 +92,7 @@ def main() -> int:
                 report(f"{role} {model}", "PASS")
             else:
                 report(f"{role} {model}", "FAIL" if role != "Fallback model" else "WARN", f"run:  ollama pull {model}")
-        from jarvis import INTENT_SCHEMA, SYSTEM_PROMPT
+        from assistant import INTENT_SCHEMA, SYSTEM_PROMPT
         for model in (s.model_gaming, s.model_normal):
             if full(model) not in installed:
                 continue
@@ -110,12 +110,12 @@ def main() -> int:
             except Exception as exc:
                 report(f"{model} answers", "FAIL", str(exc))
             finally:
-                asyncio.run(llm.unload(model))     # leave VRAM free; JARVIS loads what it needs
+                asyncio.run(llm.unload(model))     # leave VRAM free; Kageon loads what it needs
         if t.gpu_available:
             free, total = t.vram_info()
             free_gb = free / 1024 ** 3
             report("Free VRAM right now", "PASS",
-                   f"{free_gb:.1f} of {total / 1024 ** 3:.1f} GB (JARVIS switches to gaming mode when a game "
+                   f"{free_gb:.1f} of {total / 1024 ** 3:.1f} GB (Kageon switches to gaming mode when a game "
                    f"leaves less room than the normal model needs + {s.vram_headroom_gb} GB)")
 
     section("Windows app discovery")
@@ -169,11 +169,18 @@ def voice_checks(s, no_sound: bool) -> None:
     try:
         from openwakeword.model import Model
         from openwakeword.utils import download_models
-        download_models([s.wake_word_model])
-        Model(wakeword_models=[s.wake_word_model], inference_framework="onnx")
-        report(f"Wake word model '{s.wake_word_model}'", "PASS")
+        from config import resolve_wake_model
+        model, phrase, custom = resolve_wake_model(s.wake_word_model)
+        if not custom:
+            download_models([model])
+        Model(wakeword_models=[model], inference_framework="onnx")
+        if custom:
+            report(f"Wake word '{phrase}'", "PASS", model)
+        else:
+            report(f"Wake word '{phrase}'", "WARN", "temporary -- train 'Hey Kageon' (see models/README.md)")
     except Exception as exc:
-        report(f"Wake word model '{s.wake_word_model}'", "FAIL", str(exc))
+        report("Wake word model", "FAIL", str(exc))
+        phrase = "Hey Kageon"
 
     # Whisper
     from voice import STT, TTS
@@ -189,7 +196,7 @@ def voice_checks(s, no_sound: bool) -> None:
 
     # mic + STT live test
     if stt:
-        input(f"\n  {C}Press Enter, then say something like \"Hey Jarvis, open Notepad\" (5 seconds)...{X}")
+        input(f"\n  {C}Press Enter, then say something like \"{phrase}, open Notepad\" (5 seconds)...{X}")
         try:
             audio = sd.rec(int(5 * 16000), samplerate=16000, channels=1, dtype="int16",
                            device=int(s.mic_device) if s.mic_device.isdigit() else (s.mic_device or None))
@@ -206,11 +213,11 @@ def voice_checks(s, no_sound: bool) -> None:
     # TTS
     try:
         tts = TTS(s.tts_voice, s.tts_voice_arabic)
-        mp3 = asyncio.run(tts.synthesize("All systems online. JARVIS voice check complete."))
+        mp3 = asyncio.run(tts.synthesize("All systems online. Kageon voice check complete."))
         report("Text-to-speech (edge-tts)", "PASS", f"{len(mp3) // 1024} KB, voice {s.tts_voice}")
         if not no_sound:
             tts.play_mp3(mp3)
-            ans = input(f"  {C}Did you hear JARVIS speak? [y/n] {X}").strip().lower()
+            ans = input(f"  {C}Did you hear Kageon speak? [y/n] {X}").strip().lower()
             report("Speaker playback", "PASS" if ans.startswith("y") else "FAIL",
                    "" if ans.startswith("y") else "check Windows default output device")
     except Exception as exc:

@@ -45,7 +45,7 @@ def pair_ws(client, pin="4321"):
 def test_health_and_discover_are_public(client):
     assert client.get("/api/health").json()["pin_required"] is True
     d = client.get("/api/discover").json()
-    assert d["service"] == "ai-command-center" and d["ws_path"] == "/ws"
+    assert d["service"] == "kageon" and d["ws_path"] == "/ws"
 
 
 def test_http_requires_token(client):
@@ -86,14 +86,14 @@ def test_ws_full_flow(client):
     assert recv_until(ws, "pong")["request_id"] == "p1"
 
     ws.send_json({"type": "chat", "text": "open spotify", "request_id": "c1"})
-    r = recv_until(ws, "jarvis_reply")
+    r = recv_until(ws, "assistant_reply")
     assert r["request_id"] == "c1" and r["status"] == "done"
 
     ws.send_json({"type": "chat", "text": "shut down", "request_id": "c2"})
-    r = recv_until(ws, "jarvis_reply")
+    r = recv_until(ws, "assistant_reply")
     assert r["status"] == "needs_confirmation"
     ws.send_json({"type": "confirm", "pending_id": r["pending_id"], "approve": False, "request_id": "c3"})
-    assert recv_until(ws, "jarvis_reply")["status"] == "cancelled"
+    assert recv_until(ws, "assistant_reply")["status"] == "cancelled"
 
     ws.send_json({"type": "launch", "target": "https://example.com", "request_id": "l1"})
     lr = recv_until(ws, "launch_result")
@@ -171,7 +171,7 @@ def test_mode_http_and_ws(client):
         ws.send_json({"type": "get_mode", "request_id": "m2"})
         assert recv_until(ws, "mode")["request_id"] == "m2"
         ws.send_json({"type": "chat", "text": "which model are you using", "request_id": "c"})
-        assert "qwen3.5:9b" in recv_until(ws, "jarvis_reply")["reply"]
+        assert "qwen3.5:9b" in recv_until(ws, "assistant_reply")["reply"]
 
 
 

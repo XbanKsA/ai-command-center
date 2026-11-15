@@ -1,8 +1,8 @@
 """
 Tablet simulator -- test the backend exactly the way the tablet app will use it.
 
-  python tools/test_client.py --check          automatic end-to-end check (discovery, PIN, telemetry, JARVIS)
-  python tools/test_client.py                  interactive: discover -> PIN -> chat with JARVIS
+  python tools/test_client.py --check          automatic end-to-end check (discovery, PIN, telemetry, Kageon)
+  python tools/test_client.py                  interactive: discover -> PIN -> chat with Kageon
   python tools/test_client.py --watch          live telemetry stream
   python tools/test_client.py --discover       only test UDP auto-discovery
 
@@ -26,7 +26,7 @@ try:
 except ImportError:
     sys.exit("Missing package: pip install websockets")
 
-SERVICE_ID = "ai-command-center"
+SERVICE_ID = "kageon"
 DISCOVERY_PORT = 37020
 TOKEN_FILE = Path(__file__).with_name(".token")
 
@@ -216,12 +216,12 @@ async def run_check(host, port, pin, name) -> int:
 
     if st["ollama"]["model_installed"]:
         t1 = time.time()
-        r = await request({"type": "chat", "text": "Say hello in five words."}, "jarvis_reply")
-        ok("JARVIS chat answer", r["status"] in ("chat", "done"), f"({time.time() - t1:.1f}s) {r['reply'][:70]}")
-        r = await request({"type": "chat", "text": "shut down the computer"}, "jarvis_reply")
+        r = await request({"type": "chat", "text": "Say hello in five words."}, "assistant_reply")
+        ok("Kageon chat answer", r["status"] in ("chat", "done"), f"({time.time() - t1:.1f}s) {r['reply'][:70]}")
+        r = await request({"type": "chat", "text": "shut down the computer"}, "assistant_reply")
         ok("Dangerous command asks for confirmation", r["status"] == "needs_confirmation", r["reply"][:70])
         if r.get("pending_id"):
-            c = await request({"type": "confirm", "pending_id": r["pending_id"], "approve": False}, "jarvis_reply")
+            c = await request({"type": "confirm", "pending_id": r["pending_id"], "approve": False}, "assistant_reply")
             ok("Cancel works (PC NOT shut down)", c["status"] == "cancelled")
     await ws.close()
 
@@ -237,14 +237,14 @@ async def run_watch(ws, seconds: float):
         m = json.loads(await ws.recv())
         if m["type"] == "telemetry":
             print(fmt_tel(m))
-        elif m["type"] == "jarvis_event":
-            print(f"{CYAN}[voice] you: {m['user_text']}  ->  JARVIS: {m['reply']}{RESET}")
+        elif m["type"] == "assistant_event":
+            print(f"{CYAN}[voice] you: {m['user_text']}  ->  Kageon: {m['reply']}{RESET}")
         elif m["type"] == "mode":
             print(f"{YELLOW}[mode] {m.get('label')}{RESET}")
 
 
 async def run_interactive(ws):
-    print(f"""{DIM}Type anything to talk to JARVIS. Commands:
+    print(f"""{DIM}Type anything to talk to Kageon. Commands:
   /stats   /status   /mode [auto|gaming|normal]   /apps <name>   /launch <path|url|app>
   /yes   /no   /1 /2 /3   /watch   /quit{RESET}""")
     state = {"pending": None, "latest_tel": None}
@@ -255,9 +255,9 @@ async def run_interactive(ws):
             t = m["type"]
             if t == "telemetry":
                 state["latest_tel"] = m
-            elif t in ("jarvis_reply", "jarvis_event"):
-                prefix = "[voice] " if t == "jarvis_event" else ""
-                print(f"\n{CYAN}{prefix}JARVIS ({m['status']}): {m['reply']}{RESET}")
+            elif t in ("assistant_reply", "assistant_event"):
+                prefix = "[voice] " if t == "assistant_event" else ""
+                print(f"\n{CYAN}{prefix}Kageon ({m['status']}): {m['reply']}{RESET}")
                 if m.get("options"):
                     for i, o in enumerate(m["options"], 1):
                         print(f"   /{i}  {o}")

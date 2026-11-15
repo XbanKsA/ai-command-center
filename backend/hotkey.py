@@ -79,7 +79,7 @@ class GlobalHotkey:
             return
         self.active = True
         self._ready.set()
-        log.info("Global hotkey %s registered (quits JARVIS)", self.spec.upper())
+        log.info("Global hotkey %s registered (quits Kageon)", self.spec.upper())
         msg = wintypes.MSG()
         try:
             while user32.GetMessageW(ctypes.byref(msg), None, 0, 0) > 0:

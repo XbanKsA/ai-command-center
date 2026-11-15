@@ -1,5 +1,5 @@
 @echo off
-REM ==== AI Command Center - one-time setup (Windows) ====
+REM ==== Kageon - one-time setup (Windows) ====
 cd /d "%~dp0"
 echo Creating virtual environment in backend\.venv ...
 where py >nul 2>nul && (py -3 -m venv .venv) || (python -m venv .venv)
@@ -19,6 +19,6 @@ echo.
 echo ============================================================
 echo  Setup complete.
 echo  Next:  check.bat   (verifies everything + downloads voice models)
-echo  Then:  run.bat     (starts JARVIS)
+echo  Then:  run.bat     (starts Kageon)
 echo ============================================================
 pause

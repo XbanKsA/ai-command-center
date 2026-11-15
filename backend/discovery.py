@@ -4,12 +4,13 @@ UDP auto-discovery so the tablet never needs a manual IP.
 Two complementary mechanisms on the same UDP port (default 37020):
 
   1. ANNOUNCE (passive): every BROADCAST_INTERVAL seconds the PC broadcasts
-       {"service": "ai-command-center", "type": "announce", "host": "<pc ip>", "port": 8765, ...}
+       {"service": "kageon", "type": "announce", "host": "<pc ip>", "port": 8765, ...}
      to every network interface's broadcast address + 255.255.255.255.
 
-  2. PROBE (active): a client broadcasts {"service": "ai-command-center", "type": "probe"}
+  2. PROBE (active): a client broadcasts {"service": "kageon", "type": "probe"}
      to port 37020; the PC answers it directly (unicast) with the same announce payload.
      This is faster and works even when the client can't bind port 37020 itself.
+     Probes using the pre-rename ID "ai-command-center" are answered too (reply echoes that ID).
 """
 from __future__ import annotations
 
@@ -21,7 +22,7 @@ import socket
 
 import psutil
 
-from config import SERVICE_ID, VERSION
+from config import LEGACY_SERVICE_IDS, SERVICE_ID, VERSION
 
 log = logging.getLogger("discovery")
 
@@ -103,13 +104,14 @@ class _Protocol(asyncio.DatagramProtocol):
             msg = json.loads(data.decode("utf-8"))
         except Exception:
             return
-        if not isinstance(msg, dict) or msg.get("service") != SERVICE_ID:
+        if not isinstance(msg, dict) or msg.get("service") not in (SERVICE_ID, *LEGACY_SERVICE_IDS):
             return
         if msg.get("type") != "probe":
             return  # ignore our own announcements & other traffic
         peer_ip, peer_port = addr[0], addr[1]
         reply = build_announcement(ip_for_peer(peer_ip), self.service.server_port, self.service.server_name)
         reply["type"] = "probe_reply"
+        reply["service"] = msg["service"]  # old app builds look for their own ID
         self.service.probes_answered += 1
         log.debug("Discovery probe from %s:%s -> replied with %s", peer_ip, peer_port, reply["host"])
         if self.transport:
