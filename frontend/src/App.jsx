@@ -57,7 +57,7 @@ function App() {
           onClick={forgetHost}
           className="rounded-xl border border-cyan-800 px-6 py-3 text-cyan-300"
         >
-          Search again
+          Search again 🔍
         </button>
       </div>
     )
