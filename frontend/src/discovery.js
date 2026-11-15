@@ -15,16 +15,16 @@ export async function discoverJarvis(timeoutMs = 6000) {
       UdpSocket.addListener('receive', (event) => {
         try {
           const msg = JSON.parse(atob(event.buffer))
-          if (msg.service === 'ai-command-center' && msg.host && msg.port) resolve(`${msg.host}:${msg.port}`)
+          if (msg.service === 'Kageon' && msg.host && msg.port) resolve(`${msg.host}:${msg.port}`)
         } catch {
-          // not a JARVIS message - ignore it
+          // not a KAGEON message - ignore it
         }
       }).then((l) => { listener = l })
     })
 
     await UdpSocket.bind({ socketId, port: PORT })
     await UdpSocket.setBroadcast({ socketId, enabled: true })
-    const probe = btoa(JSON.stringify({ service: 'ai-command-center', type: 'probe' }))
+    const probe = btoa(JSON.stringify({ service: 'Kageon', type: 'probe' }))
     await UdpSocket.send({ socketId, address: '255.255.255.255', port: PORT, buffer: probe })
 
     const timeout = new Promise((resolve) => setTimeout(() => resolve(null), timeoutMs))

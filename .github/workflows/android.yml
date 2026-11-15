@@ -40,5 +40,5 @@ jobs:
         run: chmod +x gradlew && ./gradlew assembleDebug
       - uses: actions/upload-artifact@v6
         with:
-          name: ai-command-center-apk
+          name: kageon-apk
           path: frontend/android/app/build/outputs/apk/debug/app-debug.apk

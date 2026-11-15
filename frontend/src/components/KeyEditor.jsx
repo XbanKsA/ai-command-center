@@ -3,7 +3,7 @@ import { useEffect, useState } from 'react'
 const KINDS = [
   { id: 'app', label: 'PC app' },
   { id: 'website', label: 'Website' },
-  { id: 'command', label: 'JARVIS command' },
+  { id: 'command', label: 'KAGEON command' },
 ]
 
 const APP_SOURCE = { startapp: 'Start Menu', shortcut: 'Shortcut', builtin: 'Windows' }
@@ -32,7 +32,7 @@ function KeyEditor({ initial, apps, onSearchApps, onSave, onDelete, onCancel }) 
   }, [kind, value, onSearchApps])
 
   function save() {
-    const subtitle = { app: 'App', website: 'Website', command: 'JARVIS' }[kind]
+    const subtitle = { app: 'App', website: 'Website', command: 'KAGEON' }[kind]
     let action
     if (kind === 'command') action = { type: 'ask', text: value }
     else if (kind === 'website') action = { type: 'launch', target: value.startsWith('http') ? value : `https://${value}` }
@@ -40,7 +40,7 @@ function KeyEditor({ initial, apps, onSearchApps, onSave, onDelete, onCancel }) 
     onSave({ title: title || value, subtitle, action })
   }
 
-  const label = { app: 'APP ON YOUR PC', website: 'WEBSITE ADDRESS', command: 'WHAT TO SAY TO JARVIS' }[kind]
+  const label = { app: 'APP ON YOUR PC', website: 'WEBSITE ADDRESS', command: 'WHAT TO SAY TO KAGEON' }[kind]
   const placeholder = { app: 'Start typing, e.g. steam', website: 'youtube.com', command: 'e.g. gaming time' }[kind]
 
   return (

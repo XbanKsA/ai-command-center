@@ -1,6 +1,6 @@
 {
-  "appId": "com.aicommandcenter.tablet",
-  "appName": "AI Command Center",
+  "appId": "com.kageon.app",
+  "appName": "Kageon",
   "webDir": "dist",
   "server": {
     "androidScheme": "http",

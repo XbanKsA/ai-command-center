@@ -7,7 +7,7 @@ android {
     namespace = "com.aicommandcenter.tablet"
     compileSdk = rootProject.ext.compileSdkVersion
     defaultConfig {
-        applicationId "com.aicommandcenter.tablet"
+        applicationId "com.kageon.app"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
         versionCode buildNumber

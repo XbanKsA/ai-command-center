@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 
-export function useJarvis(host) { 
+export function useKageon(host) { 
   const [status, setStatus] = useState('connecting') // connecting , need_pin , connected , offline
   const [telemetry, setTelemetry] = useState(null)
   const [error, setError] = useState('')
@@ -27,25 +27,25 @@ export function useJarvis(host) {
         const msg = JSON.parse(event.data)
 
         if (msg.type === 'hello') {
-          const token = localStorage.getItem('jarvis_token')
+          const token = localStorage.getItem('kageon_token')
           if (token) ws.send(JSON.stringify({ type: 'auth', token }))
           else setStatus('need_pin')
         } else if (msg.type === 'auth_ok') {
-          if (msg.token) localStorage.setItem('jarvis_token', msg.token)
+          if (msg.token) localStorage.setItem('kageon_token', msg.token)
           setError('')
           setStatus('connected')
         } else if (msg.type === 'auth_error') {
-          if (msg.reason === 'invalid_token') localStorage.removeItem('jarvis_token')
+          if (msg.reason === 'invalid_token') localStorage.removeItem('kageon_token')
           if (msg.reason === 'invalid_pin') setError('Wrong PIN, try again.')
           if (msg.reason === 'locked_out') setError(`Too many wrong PINs. Wait ${msg.retry_after} seconds.`)
           setStatus('need_pin') 
-        } else if (msg.type === 'jarvis_reply') {
+        } else if (msg.type === 'assistant_reply') {
           setReply({ text: msg.reply, status: msg.status, pendingId: msg.pending_id })
-          addMessage({ from: 'jarvis', text: msg.reply, pendingId: msg.pending_id })
-        } else if (msg.type === 'jarvis_event') {
+          addMessage({ from: 'kageon', text: msg.reply, pendingId: msg.pending_id })
+        } else if (msg.type === 'assistant_event') {
           setReply({ text: msg.reply, status: msg.status, pendingId: msg.pending_id })
           addMessage({ from: 'pc', text: msg.user_text })
-          addMessage({ from: 'jarvis', text: msg.reply, pendingId: msg.pending_id })
+          addMessage({ from: 'kageon', text: msg.reply, pendingId: msg.pending_id })
         setReply({ text: msg.reply, status: msg.status, pendingId: msg.pending_id })
         } else if (msg.type === 'launch_result') {
         } else if (msg.type === 'apps') {
@@ -94,7 +94,7 @@ export function useJarvis(host) {
       const res = await fetch(`http://${host}/api/voice`, {
         method: 'POST',
         headers: {
-          Authorization: `Bearer ${localStorage.getItem('jarvis_token')}`,
+          Authorization: `Bearer ${localStorage.getItem('kageon_token')}`,
           'Content-Type': blob.type,
         },
         body: blob,
@@ -102,13 +102,13 @@ export function useJarvis(host) {
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
       const data = await res.json()
       if (!data.transcript) {
-        addMessage({ from: 'jarvis', text: "I didn't catch anything. Try again?" })
+        addMessage({ from: 'kageon', text: "I didn't catch anything. Try again?" })
         return
       }
       addMessage({ from: 'me', text: data.transcript })
-      addMessage({ from: 'jarvis', text: data.reply.reply, pendingId: data.reply.pending_id })
+      addMessage({ from: 'kageon', text: data.reply.reply, pendingId: data.reply.pending_id })
     } catch (err) {
-      addMessage({ from: 'jarvis', text: `Voice failed: ${err.message}` })
+      addMessage({ from: 'kageon', text: `Voice failed: ${err.message}` })
     }
   }
 

@@ -11,7 +11,7 @@ const DEFAULT_KEYS = [
   { title: 'Deadlock', subtitle: 'Game', action: { type: 'launch', target: 'deadlock' } },
   { title: 'Gaming time', subtitle: 'Routine', action: { type: 'ask', text: 'gaming time' } },
   { title: 'VS Code', subtitle: 'App', action: { type: 'launch', target: 'visual studio code' } },
-  { title: 'Which model?', subtitle: 'Ask JARVIS', action: { type: 'ask', text: 'which model are you using' } },
+  { title: 'Which model?', subtitle: 'Ask KAGEON', action: { type: 'ask', text: 'which model are you using' } },
 ]
 
 function loadSlots() {

@@ -2,7 +2,7 @@ import { useCallback, useState } from 'react'
 import { useKeys } from './useKeys'
 import KeyEditor from './components/KeyEditor'
 import ReplyToast from './components/ReplyToast'
-import { useJarvis } from './useJarvis'
+import { useKageon } from './useKageon'
 import PinScreen from './components/PinScreen'
 import Stats from './components/Stats'
 import Clock from './components/Clock'
@@ -16,18 +16,18 @@ import ConnectScreen from './components/ConnectScreen'
 const AOD_AFTER_MS = 60 * 1000 // 60 seconds
 
 function App() {
-  const [host, setHost] = useState(() => localStorage.getItem('jarvis_host'))
+  const [host, setHost] = useState(() => localStorage.getItem('kageon_host'))
 
   const saveHost = useCallback((h) => {
-    localStorage.setItem('jarvis_host', h)
+    localStorage.setItem('kageon_host', h)
     setHost(h)
   }, [])
 
   function forgetHost() {
-    localStorage.removeItem('jarvis_host')
+    localStorage.removeItem('kageon_host')
     setHost(null)
   }
-        const { status, telemetry, error, sendPin, launch, ask, confirm, reply, clearReply, apps, searchApps, mode, changeMode, messages, sendVoice } = useJarvis(host)
+        const { status, telemetry, error, sendPin, launch, ask, confirm, reply, clearReply, apps, searchApps, mode, changeMode, messages, sendVoice } = useKageon(host)
     function runKey(k) {
       if (k.action.type === 'launch') launch(k.action.target)
       else ask(k.action.text)
@@ -67,12 +67,12 @@ function App() {
   return (
     <div className="h-screen bg-black text-white p-6 flex flex-col gap-6">
       <header className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold tracking-[0.3em] text-cyan-400">JARVIS</h1>
+        <h1 className="text-2xl font-bold tracking-[0.3em] text-cyan-400">KAGEON</h1>
            <Stats t={telemetry} />
                       <div className="flex items-center gap-4">
                         <ModeToggle mode={mode} onChange={changeMode} />
                                      <button onClick={() => setChatOpen(true)} className="h-10 rounded-xl bg-cyan-400 px-4 font-bold text-black">
-               Ask JARVIS
+               Ask KAGEON
              </button>
              <button
                onClick={() => setEditMode(!editMode)}
