@@ -129,6 +129,8 @@ def name_score(query: str, name: str) -> float:
         return 0.0
     if q == n or q == name.lower():
         return 1.0
+    if q.replace(" ", "") == n.replace(" ", ""):              # "gfxpack" == "GFX Pack"
+        return 0.95
     qw, nw = q.split(), n.split()
     if all(w in nw for w in qw):
         return 0.9
@@ -295,6 +297,22 @@ class FileManager:
             return sorted(hits, key=lambda p: -name_score(what, p.name))[:1]
         best = self.best_match(what)
         return [best] if best else []
+
+    def list_folder(self, folder: Path) -> dict:
+        """What's inside a folder (top level): folder names, file names and how many of each kind."""
+        if not self.is_allowed(folder) or not folder.is_dir():
+            raise FileError(f"I'm not allowed to look in {folder}. I only work in {self.allowed_names()}.")
+        dirs, files, kinds = [], [], {}
+        for p in sorted(folder.iterdir(), key=lambda x: x.name.lower()):
+            if p.name.startswith((".", "~$", "$")) or p.name.lower() == "desktop.ini":
+                continue
+            if p.is_dir():
+                dirs.append(p.name)
+                continue
+            files.append(p.name)
+            kind = "shortcuts" if p.suffix.lower() in (".lnk", ".url", ".appref-ms") else (category_of(p) or "other files")
+            kinds[kind.lower()] = kinds.get(kind.lower(), 0) + 1
+        return {"folder": folder.name, "dirs": dirs, "files": files, "kinds": kinds}
 
     # ------------------------------------------------------------------ plans (shown before doing)
     def plan_transfer(self, op: str, items: list[Path], dest: Path) -> Plan:

@@ -279,6 +279,7 @@ Settings: `MEMORY_ENABLED`, `MEMORY_MAX_FACTS`.
 | "Rename budget to *Budget 2026*" | Keeps the file extension. |
 | "Clean up my desktop" / "Organize downloads" | *"I'll move 37 files into 5 folders (20 images, …). Go ahead?"* Sorts files into Images, Videos, Music, Documents, Archives, Installers and Code. App/game icons (shortcuts) stay where they are. |
 | "Where is my CV?" / "Find my budget" | *"I found CV 2026.pdf in Documents. Want me to open it?"* Several matches: it asks which one. |
+| "What's in my downloads?" / "What does the GFX Pack folder contain?" | *"GFX Pack has 24 items: 3 folders (Fonts, …) and 21 files (18 images, 3 videos)."* Small folders are read out name by name. |
 | "Open my CV" / "Open my downloads" | Opens a file or folder by name when no app has that name. |
 | "Undo that" / "Put it back" | Reverses the last file change, even after a restart (journal in `data/file_actions.json`). Undoing a copy sends the copy to the **Recycle Bin**. |
 

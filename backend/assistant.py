@@ -40,10 +40,10 @@ INTENTS = [
     "set_mode", "model_info", "play_media", "screen",
     "remember", "recall", "forget", "create_routine", "list_routines", "delete_routine",
     "type_text", "create_folder", "move_files", "copy_files", "rename_file", "organize_folder", "find_file", "undo",
-    "unknown",
+    "list_folder", "unknown",
 ]
 FILE_INTENTS = ("type_text", "create_folder", "move_files", "copy_files", "rename_file", "organize_folder",
-                "find_file", "undo")
+                "find_file", "undo", "list_folder")
 MEDIA_TARGETS = ["play_pause", "next", "previous", "stop", "mute", "volume_up", "volume_down"]
 
 INTENT_SCHEMA = {
@@ -93,6 +93,8 @@ Intents:
 - rename_file: target = the current file or folder name, dest = the new name.
 - organize_folder: tidy a folder by sorting its files into folders by type. target = the folder ("desktop" if not said).
 - find_file: the user looks for a file or folder on their PC. target = its name (without "my").
+- list_folder: the user asks what is inside a folder ("what's in my downloads", "what does the GFX Pack folder
+  contain"). target = the folder name.
 - undo: undo the last file change ("undo that", "put it back"). target = "".
 - media_control: target is one of {MEDIA_TARGETS}.
 - system_stats: user asks about CPU / GPU / RAM / performance / temperature.
@@ -107,6 +109,9 @@ Rules:
 - "site" and "dest" are "" and "steps" is [] unless the intent uses them.
 - Facts listed under "What you remember about the user" are true; use them when relevant.
 - "reply" for actions = a very short spoken acknowledgement.
+- Never start a reply with a greeting ("Hey", "Hi") or the user's name; just answer.
+- Follow-ups ("what does that mean?", "explain more", "what did you type?") are about the previous messages:
+  answer from them with intent "chat" instead of asking what the user means.
 - Always write "reply" in the SAME language the user used (Arabic -> Arabic, English -> English).
 - confidence = 0..1, how sure you are about the intent and target. Never invent targets.
 - Only output the JSON object.
@@ -344,6 +349,12 @@ DATE_RE = re.compile(_WAKE_PREFIX + _POLITE + r"(?:tell me\s+)?(?:what\s+(?:s\s+
 
 # ------------------------------------------------------------------ files and typing (instant rules)
 _FOLDER_WORDS = r"(?:desktop|documents|downloads|pictures|videos|music)"
+LIST_RES = [re.compile(_WAKE_PREFIX + _POLITE + r) for r in (
+    r"(?:what\s+(?:s|is|are)|show\s+me\s+what\s+s|tell\s+me\s+what\s+s)\s+(?:in|inside|on)\s+(?:my\s+|the\s+)?"
+    r"(?P<t>.+?)(?:\s+folder)?$",
+    r"what\s+(?:does|do)\s+(?:my\s+|the\s+)?(?P<t>.+?)(?:\s+folder)?\s+(?:contain|have(?:\s+in\s+it)?)$",
+    r"(?:list|show(?:\s+me)?)\s+(?:the\s+|all\s+)?(?:files|everything|stuff)\s+(?:in|on|inside)\s+(?:my\s+|the\s+)?"
+    r"(?P<t>.+?)(?:\s+folder)?$")]
 UNDO_RE = re.compile(_WAKE_PREFIX + _POLITE + r"(?:undo(?:\s+(?:that|it|this|the last (?:thing|action|change)))?"
                      r"|put (?:it|them|everything) back|revert (?:that|it))(?:\s+please)?$")
 ORGANIZE_RE = re.compile(_WAKE_PREFIX + _POLITE + r"(?:organi[sz]e|clean up|clean|tidy(?:\s+up)?|sort(?:\s+out)?)\s+"
@@ -538,6 +549,7 @@ class Assistant:
                 resp = self._response(text, source, "en", "unknown", "", msg("unclear", "en"), "failed")
             else:
                 resp = await self._handle(text, source)
+                self._remember_response(text, resp)
         resp["elapsed_ms"] = int((time.perf_counter() - t0) * 1000)
         if self.memory and text:
             try:
@@ -552,6 +564,7 @@ class Assistant:
                       choice: int | None = None) -> dict:
         async with self._lock:
             resp = await asyncio.to_thread(self._resolve_pending, pending_id, approve, source, choice, "")
+            self._remember_response("yes" if approve else "no", resp)
         await self._emit(resp)
         return resp
 
@@ -640,7 +653,6 @@ class Assistant:
             log.warning("Unparseable LLM output: %r", raw[:300])
             return self._via(self._response(text, source, lang, "unknown", "", msg("unclear", lang), "failed"), "llm")
 
-        self._remember(text, parsed)
         log.info("Intent: %s target=%r browser=%r conf=%.2f (%s)", parsed["intent"], parsed["target"],
                  parsed["browser"], parsed["confidence"], source)
         if parsed["intent"] == "set_mode":
@@ -673,7 +685,8 @@ class Assistant:
         messages = [
             {"role": "system", "content": "You are Kageon, a helpful assistant. You are looking at a screenshot of the "
              "user's Windows PC screen. Answer their question about it directly and concisely (2-4 short sentences, "
-             "it will be spoken aloud). Read exact text (errors, titles, numbers) when relevant. No markdown."},
+             "it will be spoken aloud). Read exact text (errors, titles, numbers) when relevant. No markdown. "
+             "Don't start with a greeting or the user's name."},
             *self._memory_context(question),
             {"role": "user", "content": question or "What's on my screen?", "images": [image]},
         ]
@@ -863,9 +876,15 @@ class Assistant:
         msgs.append({"role": "user", "content": text})
         return msgs
 
-    def _remember(self, text: str, parsed: dict) -> None:
+    def _remember_response(self, text: str, resp: dict) -> None:
+        """Every exchange goes into the short-term history -- also screen answers, typing, file actions --
+        so follow-ups like "what does that mean?" or "what did you type?" have something to refer to."""
+        if not resp.get("reply") or resp.get("status") == "error":
+            return
+        said = {"intent": resp.get("intent") or "chat", "target": resp.get("target") or "", "browser": "", "site": "",
+                "dest": "", "steps": [], "reply": resp["reply"], "confidence": 1.0}
         self.history += [{"role": "user", "content": text},
-                         {"role": "assistant", "content": json.dumps(parsed, ensure_ascii=False)}]
+                         {"role": "assistant", "content": json.dumps(said, ensure_ascii=False)}]
         self.history = self.history[-self.history_turns * 2:]
 
     @staticmethod
@@ -974,6 +993,10 @@ class Assistant:
             return {"intent": "type_text", "target": body, "dest": app} if body else None
         if UNDO_RE.match(norm):
             return {"intent": "undo", "target": ""}
+        for rx in LIST_RES:
+            m = rx.match(norm)
+            if m and self.executor.files.resolve_folder(m.group("t")) is not None:    # "what's in the news" isn't
+                return {"intent": "list_folder", "target": m.group("t")}
         m = ORGANIZE_RE.match(norm)
         if m:
             return {"intent": "organize_folder", "target": m.group("t")}
@@ -1032,6 +1055,14 @@ class Assistant:
                     return R(f"I couldn't find a folder called {dest}.", "failed")
                 path = files.create_folder(target, parent)
                 return R(f"Created the folder {path.name} in {parent.name}.", "done", data={"path": str(path)})
+
+            if intent == "list_folder":
+                folder = files.resolve_folder(target or "desktop")
+                if folder is None:
+                    return R(f"I couldn't find a folder called {target}.", "failed")
+                info = files.list_folder(folder)
+                return R(self._describe_folder(info, lang), "done", data={"folder": str(folder),
+                         "dirs": info["dirs"][:50], "files": info["files"][:50]})
 
             if intent == "find_file":
                 hits = files.find(target, limit=3)
@@ -1092,6 +1123,24 @@ class Assistant:
         except FileError as exc:
             return R(str(exc), "failed")
         return R(msg("unclear", lang), "needs_clarification")
+
+    @staticmethod
+    def _describe_folder(info: dict, lang: str) -> str:
+        name, dirs, files, kinds = info["folder"], info["dirs"], info["files"], info["kinds"]
+        total = len(dirs) + len(files)
+        if total == 0:
+            return f"{name} is empty."
+        if total <= 8:
+            return f"{name} has " + join_names(dirs + files, lang) + "."
+        parts = []
+        if dirs:
+            shown = ", ".join(dirs[:4]) + (", ..." if len(dirs) > 4 else "")
+            parts.append(f"{len(dirs)} folder{'s' if len(dirs) != 1 else ''} ({shown})")
+        if files:
+            top = sorted(kinds.items(), key=lambda kv: -kv[1])[:4]
+            kinds_txt = ", ".join(f"{n} {k if n != 1 else k.rstrip('s')}" for k, n in top)
+            parts.append(f"{len(files)} file{'s' if len(files) != 1 else ''} ({kinds_txt})")
+        return f"{name} has {total} items: " + " and ".join(parts) + "."
 
     def _run_plan(self, plan, where: str, R=None):
         done, errors = self.executor.files.execute(plan)

@@ -188,3 +188,29 @@ async def test_llm_file_intent_and_unknown_folder(kageon):
     llm.rules["somewhere"] = intent("move_files", "cv", dest="Narnia")
     r = await a.handle_text("put the cv somewhere")
     assert r["status"] == "failed" and "Narnia" in r["reply"]
+
+
+async def test_whats_inside_a_folder(kageon):
+    a, llm, roots = kageon
+    pack = roots["desktop"] / "GFX Pack"
+    pack.mkdir()
+    for i in range(12):
+        (pack / f"overlay{i}.png").write_text("x")
+    (pack / "Fonts").mkdir()
+    r = await a.handle_text("What does gfxpack folder contain?")
+    assert r["intent"] == "list_folder" and llm.calls == []
+    assert r["reply"] == "GFX Pack has 13 items: 1 folder (Fonts) and 12 files (12 images)."
+    r = await a.handle_text("what's in my downloads")
+    assert r["reply"] == "Downloads has Screenshot old.png."
+    r = await a.handle_text("what's on my desktop")
+    assert r["reply"].startswith("Desktop has 10 items: 1 folder (GFX Pack) and 9 files (3 images")
+
+
+async def test_follow_ups_remember_every_answer(kageon):
+    a, llm, roots = kageon
+    await a.handle_text("type Dear team, see you at 5 in notepad")
+    llm.rules["what did you type"] = {"intent": "chat", "target": "", "browser": "", "reply": "I typed it.",
+                                      "confidence": 0.9}
+    await a.handle_text("what did you type")
+    history = " ".join(m["content"] for m in llm.calls[-1] if m["role"] != "system")
+    assert "Dear team, see you at 5" in history                 # the typed text is in the conversation now
