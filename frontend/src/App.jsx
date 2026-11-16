@@ -13,7 +13,9 @@ import AlwaysOn from './components/AlwaysOn'
 import ChatScreen from './components/ChatScreen'
 import ConnectScreen from './components/ConnectScreen'
 import Backdrop from './components/Backdrop'
-
+import Rail from './components/Rail'
+import TopBar from './components/TopBar'
+import { SCREENS } from './screens'
 const AOD_AFTER_MS = 60 * 1000 // 60 seconds
 
 function App() {
@@ -42,6 +44,12 @@ function App() {
     const [editMode, setEditMode] = useState(false)
     const [editing, setEditing] = useState(null)
     const [chatOpen, setChatOpen] = useState(false)
+    const [screen, setScreen] = useState('deck')
+    const title = SCREENS.find((s) => s.id === screen).label
+    function openScreen(id) {
+      if (id === 'assistant') setChatOpen(true) // the old chat, until we build the new Assistant screen
+      else setScreen(id)
+    }
     const idle = useIdle(AOD_AFTER_MS)
     if (!host) return <ConnectScreen onFound={saveHost} />
 
@@ -66,42 +74,55 @@ function App() {
 
 
   return (
-    <div className="relative isolate h-screen overflow-hidden bg-page text-hi font-sans p-6 flex flex-col gap-6">
+    <div className="relative isolate flex h-screen gap-4 overflow-hidden bg-page p-4 font-sans text-hi">
       <Backdrop />
-      <header className="flex items-center justify-between">
-        <h1 className="font-display text-2xl font-medium text-accent-text">Kageon</h1>
-           <Stats t={telemetry} />
-                      <div className="flex items-center gap-4">
-                        <ModeToggle mode={mode} onChange={changeMode} />
-                                     <button onClick={() => setChatOpen(true)} className="h-10 rounded-xl bg-cyan-400 px-4 font-bold text-black">
-               Ask KAGEON
-             </button>
-             <button
-               onClick={() => setEditMode(!editMode)}
-               className={`h-10 rounded-xl border px-4 ${editMode ? 'border-amber-400 bg-amber-400 font-bold text-black' : 'border-slate-700 text-slate-300'}`}
-             >
-               {editMode ? 'Done' : 'Edit'}
-             </button>
-             <Clock />
-           </div>
-      </header>
+      <Rail screen={screen} onChange={openScreen} />
 
-      <main className="grid grid-cols-5 grid-rows-3 gap-4 flex-1">
-        {slots.map((k, i) =>
-          k ? (
-            <Key key={i} title={k.title} subtitle={k.subtitle} onPress={() => pressSlot(i)} />
-          ) : (
-            <button
-              key={i}
-              onClick={() => pressSlot(i)}
-              className="rounded-2xl border-2 border-dashed border-slate-800 text-slate-500 hover:border-slate-600"
-            >
-              + Add key
-            </button>
-          )
+      <div className="flex min-w-0 flex-1 flex-col gap-4">
+        <TopBar title={title} mode={mode} onMode={changeMode} onAsk={() => setChatOpen(true)} />
+
+        {screen === 'deck' && (
+          <div className="flex min-h-0 flex-1 flex-col gap-4">
+            <div className="flex items-end justify-between">
+              <div>
+                <h1 className="font-display text-4xl font-medium">Deck</h1>
+                <p className="mt-1 text-sm text-low">Tap a key to run it</p>
+              </div>
+              <div className="flex items-center gap-4">
+                <Stats t={telemetry} />
+                <button
+                  onClick={() => setEditMode(!editMode)}
+                  className={`h-11 rounded-xl border px-4 text-sm font-semibold ${editMode ? 'border-accent-line bg-accent-soft text-accent-text' : 'border-line bg-card'}`}
+                >
+                  {editMode ? 'Done' : 'Edit'}
+                </button>
+              </div>
+            </div>
+
+            <main className="grid min-h-0 flex-1 grid-cols-5 grid-rows-3 gap-3">
+              {slots.map((k, i) =>
+                k ? (
+                  <Key key={i} title={k.title} subtitle={k.subtitle} onPress={() => pressSlot(i)} />
+                ) : (
+                  <button
+                    key={i}
+                    onClick={() => pressSlot(i)}
+                    className="rounded-2xl border-2 border-dashed border-slate-800 text-slate-500 hover:border-slate-600"
+                  >
+                    + Add key
+                  </button>
+                )
+              )}
+            </main>
+          </div>
         )}
-      </main>
-      <ReplyToast reply={reply} onClose={clearReply} onConfirm={confirm} />
+
+        {screen !== 'deck' && (
+          <div className="flex flex-1 items-center justify-center text-low">
+            The {title} screen comes in a later lesson
+          </div>
+        )}
+      </div>   <ReplyToast reply={reply} onClose={clearReply} onConfirm={confirm} />
             {chatOpen && (
         <ChatScreen
           messages={messages}

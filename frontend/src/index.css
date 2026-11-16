@@ -4,7 +4,7 @@
 
 /* 1. THE KNOBS: change these three numbers and the whole app changes colour */
 :root {
-  --h: 25;   /* accent hue: 0-360 around the colour wheel (264 = blue) */
+  --h: 264;   /* accent hue: 0-360 around the colour wheel (264 = blue) */
   --al: 0.62; /* accent lightness: 0 = black, 1 = white */
   --ac: 0.2;  /* accent colourfulness: 0 = gray */
 
