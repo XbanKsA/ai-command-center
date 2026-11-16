@@ -1,1 +1,57 @@
 @import "tailwindcss";
+@import "@fontsource-variable/inter";
+@import "@fontsource-variable/outfit";
+
+/* 1. THE KNOBS: change these three numbers and the whole app changes colour */
+:root {
+  --h: 25;   /* accent hue: 0-360 around the colour wheel (264 = blue) */
+  --al: 0.62; /* accent lightness: 0 = black, 1 = white */
+  --ac: 0.2;  /* accent colourfulness: 0 = gray */
+
+  /* 2. THE PALETTE: every colour in the app, all built from the knobs */
+  --page: oklch(0.17 0.045 var(--h));
+  --card: oklch(1 0 0 / 0.055);
+  --card-solid: oklch(0.23 0.045 var(--h));
+  --line: oklch(1 0 0 / 0.1);
+  --well: oklch(1 0 0 / 0.08);
+
+  --hi: oklch(0.97 0.01 var(--h));
+  --mid: oklch(0.83 0.02 var(--h));
+  --low: oklch(0.71 0.025 var(--h));
+
+  --accent: oklch(var(--al) var(--ac) var(--h));
+  --accent-ink: oklch(0.16 0.04 var(--h));
+  --accent-text: oklch(0.78 min(var(--ac), 0.15) var(--h));
+  --accent-soft: oklch(0.78 var(--ac) var(--h) / 0.14);
+  --accent-line: oklch(0.78 var(--ac) var(--h) / 0.5);
+
+  --glow-a: oklch(0.5 0.19 var(--h) / 0.42);
+  --glow-b: oklch(0.5 0.14 calc(var(--h) + 75) / 0.2);
+}
+
+/* 3. Hand the palette to Tailwind, so classes like bg-card and text-low exist */
+@theme inline {
+  --color-page: var(--page);
+  --color-card: var(--card);
+  --color-card-solid: var(--card-solid);
+  --color-line: var(--line);
+  --color-well: var(--well);
+  --color-hi: var(--hi);
+  --color-mid: var(--mid);
+  --color-low: var(--low);
+  --color-accent: var(--accent);
+  --color-accent-ink: var(--accent-ink);
+  --color-accent-text: var(--accent-text);
+  --color-accent-soft: var(--accent-soft);
+  --color-accent-line: var(--accent-line);
+  --color-glow-a: var(--glow-a);
+  --color-glow-b: var(--glow-b);
+
+  --font-sans: "Inter Variable", system-ui, sans-serif;
+  --font-display: "Outfit Variable", "Inter Variable", system-ui, sans-serif;
+}
+
+/* 4. One size rule for the whole app: everything grows and shrinks with the screen */
+html {
+  font-size: clamp(14px, 1.25vw, 22px);
+}

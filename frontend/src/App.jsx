@@ -12,6 +12,7 @@ import { useIdle } from './useIdle'
 import AlwaysOn from './components/AlwaysOn'
 import ChatScreen from './components/ChatScreen'
 import ConnectScreen from './components/ConnectScreen'
+import Backdrop from './components/Backdrop'
 
 const AOD_AFTER_MS = 60 * 1000 // 60 seconds
 
@@ -65,9 +66,10 @@ function App() {
 
 
   return (
-    <div className="h-screen bg-black text-white p-6 flex flex-col gap-6">
+    <div className="relative isolate h-screen overflow-hidden bg-page text-hi font-sans p-6 flex flex-col gap-6">
+      <Backdrop />
       <header className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold tracking-[0.3em] text-cyan-400">KAGEON</h1>
+        <h1 className="font-display text-2xl font-medium text-accent-text">Kageon</h1>
            <Stats t={telemetry} />
                       <div className="flex items-center gap-4">
                         <ModeToggle mode={mode} onChange={changeMode} />
