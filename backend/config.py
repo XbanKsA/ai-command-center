@@ -159,6 +159,9 @@ class Settings:
 
     # --- Media & screen ---
     play_site: str = field(default_factory=lambda: _get("PLAY_SITE", "youtube"))  # youtube | youtube music | spotify
+    # folders Kageon may create/move/copy/rename/organize files in (names or full paths, comma-separated)
+    allowed_folders: list = field(default_factory=lambda: [x.strip() for x in _get(
+        "ALLOWED_FOLDERS", "desktop,documents,downloads,pictures").split(",") if x.strip()])
     screen_max_side: int = field(default_factory=lambda: _get_int("SCREEN_MAX_SIDE", 1280))
 
     # --- Voice ---

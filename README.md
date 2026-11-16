@@ -37,6 +37,8 @@ backend/
 ├── tests/           Automated test suite (pytest)
 ├── hotkey.py        Global quit shortcut (Ctrl+Shift+Q)
 ├── setup.bat / check.bat / run.bat / gpu_voice.bat
+├── files.py         PC control: find / create / move / copy / rename / organize / undo (safe folders only)
+├── keyboard_text.py types text into the window in front (any language, emoji)
 ├── tray.py          system-tray icon (Show PIN / Open log / Quit) + "Kageon is running" notification
 ├── startup_on.bat / startup_off.bat / autostart.bat   (start with Windows, in the tray)
 └── requirements.txt
@@ -51,6 +53,8 @@ backend/
 - **Closing apps, sleep, shutdown and restart always need confirmation.** Critical Windows processes can never be closed.
 - Commands the model is unsure about (confidence < 0.5) are confirmed before they run.
 - `DRY_RUN=true` in `.env` makes Kageon only *log* actions, which is useful for safe testing.
+- **Files are only touched inside `ALLOWED_FOLDERS`** (Desktop, Documents, Downloads, Pictures by default). Nothing is
+  ever deleted permanently, existing files are never overwritten, and every change can be undone (see below).
 
 ---
 
@@ -264,6 +268,26 @@ Settings: `MEMORY_ENABLED`, `MEMORY_MAX_FACTS`.
 
 ---
 
+## PC control: files, folders and typing
+
+| Say | What happens |
+|---|---|
+| "Type *Hello Sara, see you at 5!* in Notepad" | Opens Notepad (a new tab), waits until it's in front, then types it exactly. Without "in …" it types into the window in front. |
+| "Create a folder called *Game Clips* in Documents" | Creates it (Desktop if you don't say where). Capitals are kept. |
+| "Move my screenshots to Pictures" / "…from Downloads to Pictures" | One file: done at once. Several: *"Move 12 items to Pictures?"* first. Kinds it understands: screenshots, images, videos, music, documents, pdfs, zip files, installers, or a file/folder name. |
+| "Copy budget to the desktop" | Same as move, but keeps the original. |
+| "Rename budget to *Budget 2026*" | Keeps the file extension. |
+| "Clean up my desktop" / "Organize downloads" | *"I'll move 37 files into 5 folders (20 images, …). Go ahead?"* Sorts files into Images, Videos, Music, Documents, Archives, Installers and Code. App/game icons (shortcuts) stay where they are. |
+| "Where is my CV?" / "Find my budget" | *"I found CV 2026.pdf in Documents. Want me to open it?"* Several matches: it asks which one. |
+| "Open my CV" / "Open my downloads" | Opens a file or folder by name when no app has that name. |
+| "Undo that" / "Put it back" | Reverses the last file change, even after a restart (journal in `data/file_actions.json`). Undoing a copy sends the copy to the **Recycle Bin**. |
+
+Safety: only inside `ALLOWED_FOLDERS` (add more in `.env`, e.g. `ALLOWED_FOLDERS=desktop,documents,downloads,pictures,videos,D:\Projects`),
+no permanent deletes, no overwriting (`photo.png` becomes `photo (2).png`), and big changes ask first.
+Typing refuses to type if the app you named doesn't come to the front, so it never types into the wrong window.
+
+---
+
 ## WebSocket protocol (for the tablet app)
 
 Connect to `ws://<pc-ip>:8765/ws`. The first message must be `auth`:
@@ -314,6 +338,7 @@ Copy `backend/.env.example` → `backend/.env` (`setup.bat` does this). The most
 | `MIC_DEVICE` | Windows default | number from `check.bat` |
 | `DRY_RUN` | `false` | `true` = log actions only |
 | `QUIT_HOTKEY` | `ctrl+shift+q` | global shortcut to shut Kageon down |
+| `ALLOWED_FOLDERS` | `desktop,documents,downloads,pictures` | folders Kageon may change files in (names or full paths) |
 | `TRAY_ENABLED` | `true` | crescent icon near the clock + "Kageon is running" notification |
 | `AUTOSTART_DELAY` | `15` | seconds to wait after Windows login before starting |
 | `END_SILENCE_MS` | `700` | silence needed before Kageon processes your command |

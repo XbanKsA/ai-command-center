@@ -27,6 +27,8 @@ from pathlib import Path
 
 import psutil
 
+from files import FileManager
+
 log = logging.getLogger("executor")
 IS_WINDOWS = sys.platform == "win32"
 CREATE_NO_WINDOW = 0x08000000
@@ -368,8 +370,10 @@ MEDIA_KEYS = {
 
 
 class Executor:
-    def __init__(self, dry_run: bool = False, app_index: AppIndex | None = None, play_site: str = "youtube"):
+    def __init__(self, dry_run: bool = False, app_index: AppIndex | None = None, play_site: str = "youtube",
+                 files: FileManager | None = None):
         self.dry_run = dry_run
+        self.files = files or FileManager(dry_run=dry_run)
         self.play_site = play_site
         self.apps = app_index or AppIndex()
 
@@ -389,19 +393,47 @@ class Executor:
             return ActionResult(False, f"Failed to {description[0].lower()}{description[1:]}: {exc}")
 
     # ---- apps
+    @staticmethod
+    def _launch(entry: AppEntry) -> None:
+        if entry.kind == "startapp":
+            subprocess.Popen(["explorer.exe", f"shell:AppsFolder\\{entry.target}"])
+        elif entry.kind == "builtin" and entry.target.endswith(":"):
+            os.startfile(entry.target)
+        elif entry.kind == "builtin":
+            subprocess.Popen([entry.target])
+        else:
+            os.startfile(entry.target)
+
     def launch_entry(self, entry: AppEntry) -> ActionResult:
-        def go():
-            if entry.kind == "startapp":
-                subprocess.Popen(["explorer.exe", f"shell:AppsFolder\\{entry.target}"])
-            elif entry.kind == "builtin" and entry.target.endswith(":"):
-                os.startfile(entry.target)
-            elif entry.kind == "builtin":
-                subprocess.Popen([entry.target])
-            else:
-                os.startfile(entry.target)
-        res = self._run(f"Opening {entry.name}", go)
+        res = self._run(f"Opening {entry.name}", lambda: self._launch(entry))
         res.data.update({"app": entry.to_dict()})
         return res
+
+    # ---- files and typing
+    def open_path(self, path: Path) -> ActionResult:
+        res = self._run(f"Opening {path.name}", lambda: os.startfile(str(path)))
+        res.data.update({"path": str(path)})
+        return res
+
+    def show_in_folder(self, path: Path) -> ActionResult:
+        return self._run(f"Showing {path.name} in its folder",
+                         lambda: subprocess.Popen(["explorer.exe", "/select,", str(path)]))
+
+    def type_text(self, text: str, app: AppEntry | None = None) -> ActionResult:
+        """Type into the window in front, or first open `app` (e.g. Notepad) and type there."""
+        def go():
+            from keyboard_text import press_ctrl, send_keys, wait_for_window
+            if app:
+                self._launch(app)
+                words = [w for w in app.norm.split() if len(w) > 2] or [app.norm]
+                if not wait_for_window(words):
+                    raise RuntimeError(f"{app.name} didn't come to the front, so I didn't type anything")
+                time.sleep(0.5)
+                if "notepad" in app.norm:
+                    press_ctrl("n")                    # fresh tab, never into an old document
+                    time.sleep(0.4)
+            send_keys(text)
+        return self._run(f"Type the text{f' in {app.name}' if app else ''}", go)
 
     def launch_target(self, target: str) -> ActionResult:
         """Launch something explicitly chosen by the user (tablet launcher slot):

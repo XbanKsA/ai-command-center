@@ -58,7 +58,7 @@ def main() -> int:
                           ("websockets", "websockets"), ("psutil", "psutil"), ("pynvml", "nvidia-ml-py"),
                           ("numpy", "numpy"), ("sounddevice", "sounddevice"), ("miniaudio", "miniaudio"),
                           ("openwakeword", "openwakeword"), ("faster_whisper", "faster-whisper"),
-                          ("edge_tts", "edge-tts"), ("pystray", "pystray")]:
+                          ("edge_tts", "edge-tts"), ("pystray", "pystray"), ("send2trash", "send2trash")]:
         try:
             importlib.import_module(mod)
             report(f"import {mod}", "PASS")

@@ -7,6 +7,7 @@ psutil>=5.9
 nvidia-ml-py>=12.560        # NVIDIA GPU telemetry (import name: pynvml)
 
 pillow>=10.0                # screenshots for "what's on my screen?" + the tray icon image
+send2trash>=1.8              # "undo" of a copy goes to the Recycle Bin, never a hard delete
 pystray>=0.19              # system-tray icon + "Kageon is running" notification (Windows)
 
 # --- voice (wake word, speech-to-text, text-to-speech) ---

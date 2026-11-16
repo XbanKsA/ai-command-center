@@ -38,6 +38,7 @@ from auth import AuthError, AuthManager
 from config import SERVICE_ID, VERSION, Settings, get_settings, resolve_wake_model
 from discovery import DiscoveryService, build_announcement, get_lan_ips
 from executor import AppIndex, Executor
+from files import FileManager
 from games import GameDetector
 from hotkey import GlobalHotkey
 from hub import Client, Hub
@@ -141,7 +142,9 @@ def create_app(settings: Settings | None = None, llm: OllamaClient | None = None
         loop = asyncio.get_running_loop()
         st.auth = AuthManager(settings.data_dir, settings.max_pin_attempts, settings.lockout_seconds, pin=pin)
         st.telemetry = TelemetryCollector()
-        st.executor = Executor(dry_run=settings.dry_run, app_index=AppIndex(), play_site=settings.play_site)
+        st.executor = Executor(dry_run=settings.dry_run, app_index=AppIndex(), play_site=settings.play_site,
+                           files=FileManager(settings.allowed_folders, settings.data_dir / "file_actions.json",
+                                             dry_run=settings.dry_run))
         st.memory = MemoryStore(settings.data_dir / "memory.db") if settings.memory_enabled else None
         st.llm = llm or OllamaClient(settings.ollama_url, settings.model_normal, settings.ollama_timeout,
                                      settings.ollama_keep_alive, settings.think_default, settings.think_timeout)

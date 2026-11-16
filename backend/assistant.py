@@ -24,6 +24,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Awaitable, Callable
 
+from files import FileError
 from executor import (SEARCH_SITES, ActionResult, AppEntry, Executor, normalize, resolve_browser,
                       resolve_search_site, resolve_site)
 from llm import LLMError, OllamaClient
@@ -37,8 +38,12 @@ INTENTS = [
     "chat", "open_app", "close_app", "open_url", "web_search", "media_control", "system_stats",
     "lock_pc", "sleep_pc", "shutdown_pc", "restart_pc", "cancel_shutdown", "confirm", "deny",
     "set_mode", "model_info", "play_media", "screen",
-    "remember", "recall", "forget", "create_routine", "list_routines", "delete_routine", "unknown",
+    "remember", "recall", "forget", "create_routine", "list_routines", "delete_routine",
+    "type_text", "create_folder", "move_files", "copy_files", "rename_file", "organize_folder", "find_file", "undo",
+    "unknown",
 ]
+FILE_INTENTS = ("type_text", "create_folder", "move_files", "copy_files", "rename_file", "organize_folder",
+                "find_file", "undo")
 MEDIA_TARGETS = ["play_pause", "next", "previous", "stop", "mute", "volume_up", "volume_down"]
 
 INTENT_SCHEMA = {
@@ -48,15 +53,16 @@ INTENT_SCHEMA = {
         "target": {"type": "string"},
         "browser": {"type": "string"},
         "site": {"type": "string"},
+        "dest": {"type": "string"},
         "steps": {"type": "array", "items": {"type": "string"}},
         "reply": {"type": "string"},
         "confidence": {"type": "number"},
     },
-    "required": ["intent", "target", "browser", "site", "steps", "reply", "confidence"],
+    "required": ["intent", "target", "browser", "site", "dest", "steps", "reply", "confidence"],
 }
 
 SYSTEM_PROMPT = f"""You are Kageon, a concise, witty, helpful AI assistant that controls a Windows PC.
-Convert every user message into ONE JSON object: {{"intent", "target", "browser", "site", "steps", "reply", "confidence"}}.
+Convert every user message into ONE JSON object: {{"intent", "target", "browser", "site", "dest", "steps", "reply", "confidence"}}.
 
 Intents:
 - chat: questions/conversation. "reply" = your full answer (max 3 short sentences, it will be spoken aloud).
@@ -78,6 +84,16 @@ Intents:
   e.g. ["open steam", "open discord", "gaming mode", "volume up"].
 - list_routines: the user asks which routines / shortcuts exist.
 - delete_routine: target = the routine's trigger phrase.
+- type_text: type on the keyboard. target = the EXACT text to type (keep the user's words, capitals and punctuation).
+  dest = the app to type in if the user names one ("notepad"), else "".
+- create_folder: target = the new folder's name. dest = where ("desktop", "documents", "downloads" or a folder name).
+- move_files / copy_files: target = what to move (a file or folder name, or a kind: "screenshots", "images", "pdfs",
+  "videos", "music", "documents", "zip files", "installers"). dest = the destination folder.
+  site = the folder to take them FROM if the user says one, else "".
+- rename_file: target = the current file or folder name, dest = the new name.
+- organize_folder: tidy a folder by sorting its files into folders by type. target = the folder ("desktop" if not said).
+- find_file: the user looks for a file or folder on their PC. target = its name (without "my").
+- undo: undo the last file change ("undo that", "put it back"). target = "".
 - media_control: target is one of {MEDIA_TARGETS}.
 - system_stats: user asks about CPU / GPU / RAM / performance / temperature.
 - lock_pc, sleep_pc, shutdown_pc, restart_pc, cancel_shutdown: target = "".
@@ -88,7 +104,7 @@ Intents:
 
 Rules:
 - "browser" is "" unless the user explicitly names a browser. Never put the browser in "target".
-- "site" is "" and "steps" is [] unless the intent uses them.
+- "site" and "dest" are "" and "steps" is [] unless the intent uses them.
 - Facts listed under "What you remember about the user" are true; use them when relevant.
 - "reply" for actions = a very short spoken acknowledgement.
 - Always write "reply" in the SAME language the user used (Arabic -> Arabic, English -> English).
@@ -96,22 +112,27 @@ Rules:
 - Only output the JSON object.
 
 Examples:
-User: open chrome -> {{"intent":"open_app","target":"chrome","browser":"","site":"","steps":[],"reply":"Opening Chrome.","confidence":0.97}}
-User: open youtube, instagram and whatsapp on google chrome -> {{"intent":"open_url","target":"youtube, instagram, whatsapp","browser":"chrome","site":"","steps":[],"reply":"Opening them in Chrome.","confidence":0.95}}
-User: افتح يوتيوب في كروم -> {{"intent":"open_url","target":"youtube","browser":"chrome","site":"","steps":[],"reply":"جاري فتح يوتيوب.","confidence":0.95}}
-User: افتح سبوتيفاي -> {{"intent":"open_app","target":"سبوتيفاي","browser":"","site":"","steps":[],"reply":"جاري فتح سبوتيفاي.","confidence":0.95}}
-User: search for the weather in riyadh -> {{"intent":"web_search","target":"weather in riyadh","browser":"","site":"google","steps":[],"reply":"Searching.","confidence":0.95}}
-User: search for bad romance by lady gaga -> {{"intent":"web_search","target":"bad romance lady gaga","browser":"","site":"youtube","steps":[],"reply":"Searching YouTube.","confidence":0.9}}
-User: search for a cat video -> {{"intent":"web_search","target":"cat","browser":"","site":"youtube","steps":[],"reply":"Searching YouTube for cat videos.","confidence":0.9}}
-User: play shape of you on spotify -> {{"intent":"play_media","target":"shape of you","browser":"","site":"spotify","steps":[],"reply":"Playing it on Spotify.","confidence":0.95}}
-User: can you see what's on my screen -> {{"intent":"screen","target":"what's on my screen","browser":"","site":"","steps":[],"reply":"Let me look.","confidence":0.95}}
-User: remember that my games are on the D drive -> {{"intent":"remember","target":"My games are on the D drive","browser":"","site":"","steps":[],"reply":"Got it.","confidence":0.95}}
-User: when I say gaming time open steam and discord and switch to gaming mode -> {{"intent":"create_routine","target":"gaming time","browser":"","site":"","steps":["open steam","open discord","gaming mode"],"reply":"Routine saved.","confidence":0.95}}
-User: turn the volume up -> {{"intent":"media_control","target":"volume_up","browser":"","site":"","steps":[],"reply":"Volume up.","confidence":0.95}}
-User: how hot is my gpu -> {{"intent":"system_stats","target":"","browser":"","site":"","steps":[],"reply":"Checking.","confidence":0.9}}
-User: shut down the computer -> {{"intent":"shutdown_pc","target":"","browser":"","site":"","steps":[],"reply":"Shutting down.","confidence":0.95}}
-User: who wrote hamlet -> {{"intent":"chat","target":"","browser":"","site":"","steps":[],"reply":"William Shakespeare wrote Hamlet.","confidence":0.99}}
-User: do the thing -> {{"intent":"unknown","target":"","browser":"","site":"","steps":[],"reply":"Which thing would you like me to do?","confidence":0.2}}
+User: open chrome -> {{"intent":"open_app","target":"chrome","browser":"","site":"","dest":"","steps":[],"reply":"Opening Chrome.","confidence":0.97}}
+User: open youtube, instagram and whatsapp on google chrome -> {{"intent":"open_url","target":"youtube, instagram, whatsapp","browser":"chrome","site":"","dest":"","steps":[],"reply":"Opening them in Chrome.","confidence":0.95}}
+User: افتح يوتيوب في كروم -> {{"intent":"open_url","target":"youtube","browser":"chrome","site":"","dest":"","steps":[],"reply":"جاري فتح يوتيوب.","confidence":0.95}}
+User: افتح سبوتيفاي -> {{"intent":"open_app","target":"سبوتيفاي","browser":"","site":"","dest":"","steps":[],"reply":"جاري فتح سبوتيفاي.","confidence":0.95}}
+User: search for the weather in riyadh -> {{"intent":"web_search","target":"weather in riyadh","browser":"","site":"google","dest":"","steps":[],"reply":"Searching.","confidence":0.95}}
+User: search for bad romance by lady gaga -> {{"intent":"web_search","target":"bad romance lady gaga","browser":"","site":"youtube","dest":"","steps":[],"reply":"Searching YouTube.","confidence":0.9}}
+User: search for a cat video -> {{"intent":"web_search","target":"cat","browser":"","site":"youtube","dest":"","steps":[],"reply":"Searching YouTube for cat videos.","confidence":0.9}}
+User: play shape of you on spotify -> {{"intent":"play_media","target":"shape of you","browser":"","site":"spotify","dest":"","steps":[],"reply":"Playing it on Spotify.","confidence":0.95}}
+User: can you see what's on my screen -> {{"intent":"screen","target":"what's on my screen","browser":"","site":"","dest":"","steps":[],"reply":"Let me look.","confidence":0.95}}
+User: remember that my games are on the D drive -> {{"intent":"remember","target":"My games are on the D drive","browser":"","site":"","dest":"","steps":[],"reply":"Got it.","confidence":0.95}}
+User: when I say gaming time open steam and discord and switch to gaming mode -> {{"intent":"create_routine","target":"gaming time","browser":"","site":"","dest":"","steps":["open steam","open discord","gaming mode"],"reply":"Routine saved.","confidence":0.95}}
+User: turn the volume up -> {{"intent":"media_control","target":"volume_up","browser":"","site":"","dest":"","steps":[],"reply":"Volume up.","confidence":0.95}}
+User: how hot is my gpu -> {{"intent":"system_stats","target":"","browser":"","site":"","dest":"","steps":[],"reply":"Checking.","confidence":0.9}}
+User: shut down the computer -> {{"intent":"shutdown_pc","target":"","browser":"","site":"","dest":"","steps":[],"reply":"Shutting down.","confidence":0.95}}
+User: type Hello Sara, see you at 5! in notepad -> {{"intent":"type_text","target":"Hello Sara, see you at 5!","browser":"","site":"","dest":"notepad","steps":[],"reply":"Typing it in Notepad.","confidence":0.95}}
+User: move my screenshots from downloads to pictures -> {{"intent":"move_files","target":"screenshots","browser":"","site":"downloads","dest":"pictures","steps":[],"reply":"Moving them.","confidence":0.92}}
+User: rename budget to budget 2026 -> {{"intent":"rename_file","target":"budget","browser":"","site":"","dest":"budget 2026","steps":[],"reply":"Renaming it.","confidence":0.9}}
+User: clean up my desktop -> {{"intent":"organize_folder","target":"desktop","browser":"","site":"","dest":"","steps":[],"reply":"Let me sort it.","confidence":0.93}}
+User: where did I put my cv -> {{"intent":"find_file","target":"cv","browser":"","site":"","dest":"","steps":[],"reply":"Looking for it.","confidence":0.92}}
+User: who wrote hamlet -> {{"intent":"chat","target":"","browser":"","site":"","dest":"","steps":[],"reply":"William Shakespeare wrote Hamlet.","confidence":0.99}}
+User: do the thing -> {{"intent":"unknown","target":"","browser":"","site":"","dest":"","steps":[],"reply":"Which thing would you like me to do?","confidence":0.2}}
 """
 
 # ------------------------------------------------------------------ language helpers
@@ -319,6 +340,52 @@ TIME_RE = re.compile(_WAKE_PREFIX + _POLITE + r"(?:tell me\s+)?(?:what\s+(?:s\s+
 DATE_RE = re.compile(_WAKE_PREFIX + _POLITE + r"(?:tell me\s+)?(?:what\s+(?:s\s+|is\s+)?(?:the\s+)?(?:date|day)"
                      r"|what\s+(?:s\s+|is\s+)?today(?:\s+s\s+date)?|today\s+s\s+date|the\s+date|which\s+day)"
                      + _WHEN + r"(?:\s+please)?$")
+
+
+# ------------------------------------------------------------------ files and typing (instant rules)
+_FOLDER_WORDS = r"(?:desktop|documents|downloads|pictures|videos|music)"
+UNDO_RE = re.compile(_WAKE_PREFIX + _POLITE + r"(?:undo(?:\s+(?:that|it|this|the last (?:thing|action|change)))?"
+                     r"|put (?:it|them|everything) back|revert (?:that|it))(?:\s+please)?$")
+ORGANIZE_RE = re.compile(_WAKE_PREFIX + _POLITE + r"(?:organi[sz]e|clean up|clean|tidy(?:\s+up)?|sort(?:\s+out)?)\s+"
+                         r"(?:my\s+|the\s+)?(?P<t>" + _FOLDER_WORDS + r"|[\w ]+?\s+folder)(?:\s+please)?$")
+FIND_RE = re.compile(_WAKE_PREFIX + _POLITE + r"(?P<v>find|locate|search (?:my (?:pc|computer|files) )?for|where\s+(?:is|s)"
+                     r"|where\s+did\s+i\s+(?:put|save))\s+(?:my|the\s+file|the\s+folder|file|folder)\s+"
+                     r"(?P<t>(?:\S+\s+){0,3}?\S+?)(?:\s+(?:file|folder|on my (?:pc|computer)))?$")
+MOVE_RE = re.compile(_WAKE_PREFIX + _POLITE + r"(?P<op>move|copy)\s+(?P<t>.+?)(?:\s+from\s+(?:my\s+|the\s+)?(?P<s>.+?))?"
+                     r"\s+(?:to|into)\s+(?:my\s+|the\s+)?(?P<d>.+?)(?:\s+folder)?$")
+# These keep the user's capitals ("a folder called Projects"), so they run on lightly-cleaned raw text.
+_RAW_LEAD = re.compile(r"^\s*(?:(?:hey|hi|ok|okay|yo)[\s,]+)?(?:" + WAKE_NAMES + r")[\s,:!.]+|^\s*(?:please|can you|could you)\s+", re.I)
+TYPE_RAW = re.compile(r"^(?:type|write)(?:\s+(?:out|down))?(?:\s*:\s*|\s+)(?P<t>.+?)$", re.I | re.S)
+FOLDER_RAW = re.compile(r"^(?:create|make|add)\s+(?:a\s+)?(?:new\s+)?folder\s+(?:called\s+|named\s+)?(?P<t>.+?)"
+                        r"(?:\s+(?:on|in|inside)\s+(?:my\s+|the\s+)?(?P<d>[^,]+?))?(?:\s+folder)?$", re.I)
+FOLDER_RAW2 = re.compile(r"^(?:create|make|add)\s+(?:a\s+)?(?:new\s+)?folder\s+(?:on|in|inside)\s+(?:my\s+|the\s+)?"
+                         r"(?P<d>.+?)\s+(?:called|named)\s+(?P<t>.+?)$", re.I)
+RENAME_RAW = re.compile(r"^rename\s+(?:my\s+|the\s+)?(?P<t>.+?)\s+(?:to|as)\s+(?P<d>.+?)$", re.I)
+
+
+def raw_command(text: str) -> str:
+    """'Hey Kageon, type Hello!' -> 'type Hello!' (keeps capitals; drops the wake word and a voice's final '.')."""
+    s = text.strip()
+    for _ in range(2):
+        s = _RAW_LEAD.sub("", s, count=1).strip()
+    return s[:-1].rstrip() if s.endswith(".") and not s.endswith("..") else s
+
+
+def _strip_quotes(s: str) -> str:
+    s = s.strip()
+    return s[1:-1] if len(s) > 1 and s[0] == s[-1] and s[0] in "\"'“”" else s
+
+
+@dataclass
+class FileOption:
+    """A file offered in "which one should I open?" (works like an app option)."""
+    path: object
+    name: str = ""
+    norm: str = ""
+
+    def __post_init__(self):
+        self.name = f"{self.path.name} ({self.path.parent.name})"
+        self.norm = normalize(self.path.name)
 
 
 def _now() -> datetime:
@@ -828,6 +895,7 @@ class Assistant:
         return {"intent": intent, "target": str(data.get("target") or "").strip(),
                 "browser": str(data.get("browser") or "").strip(),
                 "site": str(data.get("site") or "").strip(),
+                "dest": str(data.get("dest") or "").strip(),
                 "steps": [str(x).strip() for x in steps if str(x).strip()][:12],
                 "reply": str(data.get("reply") or "").strip(), "confidence": max(0.0, min(conf, 1.0))}
 
@@ -849,6 +917,10 @@ class Assistant:
             reply = f"It's {clock}." if is_time else f"Today is {date}."
             return {**base, "intent": "chat", "target": "", "reply": reply}
 
+        files = self._fast_file_intent(text, norm)
+        if files:
+            return {**base, "site": "", "dest": "", **files}
+
         m = OPEN_RE.match(soft_normalize(text))
         if m:
             target, browser = split_browser(m.group("t"))
@@ -861,7 +933,7 @@ class Assistant:
             for t in targets:
                 if resolve_site(t):
                     continue
-                if browser or self.executor.apps.match(t).status == "none":
+                if browser or (self.executor.apps.match(t).status == "none" and not self._file_target(t)):
                     return None          # unknown thing -> let the LLM interpret it
             return {**base, "intent": "open_app", "target": ", ".join(targets), "browser": browser}
 
@@ -890,6 +962,147 @@ class Assistant:
                 return {**base, "intent": "close_app", "target": target}
         return None
 
+    def _fast_file_intent(self, text: str, norm: str) -> dict | None:
+        raw = raw_command(text)
+        m = TYPE_RAW.match(raw)
+        if m and normalize(raw).startswith("type "):
+            body, app = m.group("t").strip(), ""
+            tail = re.match(r"^(?P<x>.+?)\s+(?:in|into|on|inside)\s+(?:the\s+|my\s+)?(?P<app>[\w .+-]{2,40}?)$", body, re.S)
+            if tail and self.executor.apps.match(tail.group("app")).status == "match":
+                body, app = tail.group("x").strip(), tail.group("app")
+            body = _strip_quotes(body)
+            return {"intent": "type_text", "target": body, "dest": app} if body else None
+        if UNDO_RE.match(norm):
+            return {"intent": "undo", "target": ""}
+        m = ORGANIZE_RE.match(norm)
+        if m:
+            return {"intent": "organize_folder", "target": m.group("t")}
+        m = FOLDER_RAW2.match(raw) or FOLDER_RAW.match(raw)
+        if m:
+            return {"intent": "create_folder", "target": _strip_quotes(m.group("t")), "dest": m.group("d") or ""}
+        m = RENAME_RAW.match(raw)
+        if m:
+            return {"intent": "rename_file", "target": _strip_quotes(m.group("t")), "dest": _strip_quotes(m.group("d"))}
+        m = MOVE_RE.match(norm)
+        if m and self.executor.files.resolve_folder(m.group("d")) is not None:   # "move this window left" isn't a file move
+            return {"intent": "move_files" if m.group("op") == "move" else "copy_files", "target": m.group("t"),
+                    "site": m.group("s") or "", "dest": m.group("d")}
+        m = FIND_RE.match(norm)
+        if m and not re.search(r"\b(?:installed|located|stored|kept|from)$", m.group("t")):
+            # "where is my X" is only a file search if such a file exists ("where is my brother" is not)
+            if m.group("v").startswith(("where", "search")) and not self.executor.files.find(m.group("t"), limit=1):
+                return None
+            return {"intent": "find_file", "target": m.group("t")}
+        return None
+
+    def _file_target(self, name: str):
+        """'downloads' / 'my CV' -> a folder or file to open, if there's exactly one good match."""
+        files = self.executor.files
+        key = re.sub(r"^(?:my|the)\s+", "", (name or "").strip(), flags=re.I)
+        if not key:
+            return None
+        return files.resolve_folder(key) or files.best_match(key)
+
+    def _file_action(self, R, lang: str, intent: str, p: dict) -> dict:
+        """create / move / copy / rename / organize / find / undo / type -- all safety checks live in FileManager."""
+        files, ex = self.executor.files, self.executor
+        target, dest, src = p["target"], p.get("dest", ""), p.get("site", "")
+        try:
+            if intent == "type_text":
+                if not target:
+                    return R("What should I type?", "needs_clarification")
+                app = None
+                if dest:
+                    m = ex.apps.match(dest)
+                    if m.status != "match":
+                        return R(f"I couldn't find {dest} to type in.", "failed")
+                    app = m.best
+                return self._result(R, ex.type_text(target, app), f"Typed it in {app.name}." if app else "Typed it.")
+
+            if intent == "undo":
+                summary, n, problems = files.undo()
+                reply = f"Undone: {summary}." + (f" Put back {n} item{'s' if n != 1 else ''}." if n else "")
+                if problems:
+                    reply += " " + "; ".join(problems[:3]) + "."
+                return R(reply, "done")
+
+            if intent == "create_folder":
+                parent = files.resolve_folder(dest or "desktop")
+                if parent is None:
+                    return R(f"I couldn't find a folder called {dest}.", "failed")
+                path = files.create_folder(target, parent)
+                return R(f"Created the folder {path.name} in {parent.name}.", "done", data={"path": str(path)})
+
+            if intent == "find_file":
+                hits = files.find(target, limit=3)
+                if not hits:
+                    return R(f"I couldn't find anything called {target} in {files.allowed_names()}.", "failed")
+                if len(hits) == 1:
+                    h = hits[0]
+                    return self._ask_confirm(R, intent, target, lang, lambda: ex.open_path(h),
+                                             f"I found {h.name} in {h.parent.name}. Want me to open it?",
+                                             data={"paths": [str(h)]}, done_reply=f"Opening {h.name}.")
+                return self._ask_choice(R, intent, target, lang, [FileOption(h) for h in hits],
+                                        question=f"I found {len(hits)}: " + join_names(
+                                            [f"{h.name} in {h.parent.name}" for h in hits], lang)
+                                        + ". Which one should I open?")
+
+            if intent == "rename_file":
+                hits = files.find(target, limit=3)
+                item = files.best_match(target)
+                if item is None:
+                    if hits:
+                        return R(f"I found several like that: {join_names([h.name for h in hits], lang)}. "
+                                 "Please say the full name.", "needs_clarification")
+                    return R(f"I couldn't find {target}.", "failed")
+                new = files.rename(item, dest)
+                return R(f"Renamed {item.name} to {new.name}.", "done", data={"path": str(new)})
+
+            if intent == "organize_folder":
+                folder = files.resolve_folder(target or "desktop")
+                if folder is None:
+                    return R(f"I couldn't find a folder called {target}.", "failed")
+                plan = files.plan_organize(folder)
+                return self._ask_confirm(R, intent, folder.name, lang, lambda: self._run_plan(plan, folder.name),
+                                         f"In {folder.name} I'll {plan.summary}. Go ahead?",
+                                         data={"preview": [f"{s.name} -> {d.name}" for s, d in plan.pairs[:15]]})
+
+            if intent in ("move_files", "copy_files"):
+                op = "move" if intent == "move_files" else "copy"
+                if not dest:
+                    return R(f"Where should I {op} it?", "needs_clarification")
+                source = None
+                if src:
+                    source = files.resolve_folder(src)
+                    if source is None:
+                        return R(f"I couldn't find a folder called {src}.", "failed")
+                items = files.select(target, source)
+                if not items:
+                    return R(f"I couldn't find {target}{f' in {source.name}' if source else ''}.", "failed")
+                folder = files.resolve_folder(dest)
+                if folder is None:
+                    return R(f"I couldn't find a folder called {dest}. You can ask me to create it first.", "failed")
+                plan = files.plan_transfer(op, items, folder)
+                if len(plan.pairs) == 1 and op == "move":
+                    return self._run_plan(plan, folder.name, R)
+                what = plan.pairs[0][0].name if len(plan.pairs) == 1 else f"{len(plan.pairs)} items"
+                return self._ask_confirm(R, intent, target, lang, lambda: self._run_plan(plan, folder.name),
+                                         f"{op.title()} {what} to {folder.name}?",
+                                         data={"preview": [s.name for s, _ in plan.pairs[:15]]})
+        except FileError as exc:
+            return R(str(exc), "failed")
+        return R(msg("unclear", lang), "needs_clarification")
+
+    def _run_plan(self, plan, where: str, R=None):
+        done, errors = self.executor.files.execute(plan)
+        verb = "copied" if plan.op == "copy" else "moved"
+        text = f"Done, {verb} {done} item{'s' if done != 1 else ''} to {where}." if plan.summary.startswith(plan.op) \
+            else f"Done! {where} is organized. Say 'undo that' to put everything back."
+        if errors:
+            text += f" {len(errors)} couldn't be {verb} (maybe open in another program): " + "; ".join(errors[:3]) + "."
+        res = ActionResult(done > 0 or not plan.pairs, text, {"errors": errors})
+        return self._result(R, res, text) if R else res
+
     # ---------------- dispatch (runs in a worker thread: may touch Windows APIs)
     def _dispatch(self, text: str, source: str, lang: str, p: dict) -> dict:
         intent, target, browser, reply, conf = p["intent"], p["target"], p["browser"], p["reply"], p["confidence"]
@@ -910,6 +1123,8 @@ class Assistant:
                     return R(pend.question, "needs_choice", pending_id=pend.id, options=[e.name for e in pend.options])
                 return self._resolve_pending(pend.id, True, source, idx, text)
             return self._resolve_pending(pend.id, intent == "confirm", source, None, text)
+        if intent in FILE_INTENTS:
+            return self._file_action(R, lang, intent, p)
         if intent == "system_stats":
             snap = self.telemetry.snapshot()
             return R(self.telemetry.spoken_summary(), "done", data={"telemetry": snap})
@@ -978,6 +1193,7 @@ class Assistant:
 
         apps: list[AppEntry] = []
         sites: list[tuple[str, str]] = []
+        paths: list = []
         missing: list[str] = []
         ambiguous = None
         for t in targets:
@@ -998,21 +1214,23 @@ class Assistant:
                 sites.append(site)
             elif m.status == "ambiguous" and ambiguous is None:
                 ambiguous = (t, [e for e, _ in m.candidates[:3]])
+            elif (fp := self._file_target(t)) is not None:
+                paths.append(fp)                 # "open my downloads" / "open my CV"
             else:
                 missing.append(t)
 
-        if not apps and not sites:
+        if not apps and not sites and not paths:
             if ambiguous:
                 return self._ask_choice(R, "open_app", ambiguous[0], lang, ambiguous[1])
             return R(msg("not_found", lang, q=join_names(missing or targets, lang)), "failed")
 
-        names = [a.name for a in apps] + [s[0] for s in sites]
+        names = [a.name for a in apps] + [s[0] for s in sites] + [fp.name for fp in paths]
         browser_name = BROWSER_NAMES.get(resolve_browser(browser) or "", browser.title() if browser else "")
         reply = (msg("opening_in", lang, name=join_names(names, lang), browser=browser_name) if browser and sites
                  else msg("opening", lang, name=join_names(names, lang)))
 
         def run_all() -> ActionResult:
-            results = [ex.launch_entry(a) for a in apps]
+            results = [ex.launch_entry(a) for a in apps] + [ex.open_path(fp) for fp in paths]
             if sites:
                 results.append(ex.open_urls([u for _, u in sites], browser or None))
             ok = all(r.ok for r in results)
@@ -1050,11 +1268,11 @@ class Assistant:
         self.pending[p.id] = p
         return R(question, "needs_confirmation", pending_id=p.id, data=data or {})
 
-    def _ask_choice(self, R, intent, target, lang, entries) -> dict:
+    def _ask_choice(self, R, intent, target, lang, entries, question: str = "") -> dict:
         self._expire_pending()
         self.pending.clear()
         names = [e.name for e in entries]
-        question = msg("ambiguous", lang, q=target, opts=join_names(names, lang))
+        question = question or msg("ambiguous", lang, q=target, opts=join_names(names, lang))
         p = Pending(uuid.uuid4().hex[:12], "choose", intent, target, lang, question=question, options=entries)
         self.pending[p.id] = p
         return R(question, "needs_choice", pending_id=p.id, options=names)
@@ -1081,6 +1299,8 @@ class Assistant:
                 self.pending[p.id] = p      # keep waiting for a valid choice
                 return R(p.question, "needs_choice", pending_id=p.id, options=[e.name for e in p.options])
             entry = p.options[choice]
+            if isinstance(entry, FileOption):
+                return self._result(R, self.executor.open_path(entry.path), f"Opening {entry.path.name}.")
             return self._result(R, self.executor.launch_entry(entry), msg("opening", p.lang, name=entry.name))
         res = p.run()
         return self._result(R, res, p.done_reply or res.message)

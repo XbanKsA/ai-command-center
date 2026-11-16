@@ -16,14 +16,18 @@ SCREEN_PHRASES = [
     "this error", "this message", "this window", "this page", "what does this say", "read this", "read it for me",
     "can you see", "do you see", "look at this", "what's in front of me",
 ]
-_NOT_SCREEN = re.compile(r"^(open|close|launch|start|play|search|lock|turn|take a screenshot and save)\b")
+_NOT_SCREEN = re.compile(r"^(open|close|launch|start|play|search|lock|turn|take a screenshot and save|move|copy|"
+                         r"rename|organi[sz]e|clean|tidy|sort|type|create|make|find|locate|undo)\b")
+_WAKE = re.compile(r"^(?:(?:hey|hi|ok|okay|yo)[\s,]+)?(?:kageon|kagion|kage on|cage on)[\s,:!.]+")
+_SCREEN_RE = re.compile(r"\b(?:" + "|".join(re.escape(p) for p in SCREEN_PHRASES) + r")\b")
 
 
 def is_screen_question(text: str) -> bool:
     t = re.sub(r"\s+", " ", (text or "").lower().replace("’", "'")).strip()
+    t = _WAKE.sub("", t).removeprefix("please ").strip()
     if _NOT_SCREEN.match(t):
         return False
-    return any(p in t for p in SCREEN_PHRASES)
+    return bool(_SCREEN_RE.search(t))     # whole words: "my screen" but not "my screenshots"
 
 
 class ScreenError(Exception):
