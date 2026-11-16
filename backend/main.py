@@ -126,9 +126,11 @@ class State:
 
 def create_app(settings: Settings | None = None, llm: OllamaClient | None = None,
                background: bool = True, pin: str | None = None,
-               on_quit: Callable[[], None] | None = None) -> FastAPI:
+               on_quit: Callable[[], None] | None = None,
+               on_ready: Callable[[dict], None] | None = None) -> FastAPI:
     """background=False disables UDP discovery, voice, hotkey and the Ollama warm-up (used by tests).
-    on_quit is called (from any thread) when the quit hotkey is pressed."""
+    on_quit is called (from any thread) when the quit hotkey is pressed.
+    on_ready gets {"pin", "wake_phrase"} once the server is up (used by the tray icon)."""
     settings = settings or get_settings()
     st = State()
     st.settings = settings
@@ -189,6 +191,9 @@ def create_app(settings: Settings | None = None, llm: OllamaClient | None = None
                 st.hotkey.start()
         print_banner(settings, st.auth.pin, ollama, st.telemetry.gpu_name, st.hotkey, st.modes)
         log.info("Server ready on port %d", settings.port)
+        if on_ready:
+            on_ready({"pin": st.auth.pin,
+                      "wake_phrase": st.voice.wake_phrase if settings.voice_enabled else None})
         try:
             yield
         finally:
@@ -509,18 +514,59 @@ async def _recv_json(ws: WebSocket, timeout: float | None = None) -> dict | None
 
 
 if __name__ == "__main__":
+    import argparse
+    import threading
+    import time
+
     import uvicorn
 
+    from tray import Tray, port_in_use, redirect_output_to_log
+
+    _parser = argparse.ArgumentParser(description="Kageon core server")
+    _parser.add_argument("--autostart", action="store_true",
+                         help="started at Windows login: waits AUTOSTART_DELAY seconds first (Wi-Fi, audio, Ollama)")
+    _args = _parser.parse_args()
+
     _settings = get_settings()
+    _log_path = None
+    if _args.autostart or sys.stdout is None:          # pythonw.exe: no console window
+        _log_path = _settings.data_dir / "kageon.log"
+        redirect_output_to_log(_log_path)
     setup_logging(_settings.log_level)
     _server: uvicorn.Server | None = None
+    _quit = threading.Event()
 
     def _request_quit() -> None:
+        _quit.set()
         if _server is not None:
             _server.should_exit = True       # uvicorn notices within ~0.1 s and shuts down cleanly
 
-    _config = uvicorn.Config(create_app(_settings, on_quit=_request_quit), host=_settings.host, port=_settings.port,
+    _tray = Tray(on_quit=_request_quit, log_path=_log_path) if _settings.tray_enabled else None
+    if _tray:
+        _tray.start()
+
+    def _finish(code: int = 0) -> None:
+        if _tray:
+            _tray.stop()
+        sys.exit(code)
+
+    if port_in_use(_settings.port):
+        log.error("Kageon is already running (port %d is in use) -- not starting a second copy", _settings.port)
+        if _tray and _tray.icon:
+            _tray.notify("Kageon is already running", "Look for the crescent icon near the clock.")
+            time.sleep(5)                             # let the notification show before the icon goes away
+        _finish(1)
+
+    if _args.autostart and _settings.autostart_delay > 0:
+        log.info("Started with Windows -- waiting %ds for Wi-Fi, audio and Ollama", _settings.autostart_delay)
+        if _quit.wait(_settings.autostart_delay):      # "Quit Kageon" pressed while waiting
+            _finish(0)
+
+    _config = uvicorn.Config(create_app(_settings, on_quit=_request_quit, on_ready=_tray.ready if _tray else None),
+                             host=_settings.host, port=_settings.port,
                              log_level=_settings.log_level, ws_ping_interval=20, ws_ping_timeout=20)
     _server = uvicorn.Server(_config)
-    _server.run()
+    if not _quit.is_set():
+        _server.run()
     print("Kageon stopped. Goodbye.")
+    _finish(0)

@@ -37,7 +37,8 @@ backend/
 ├── tests/           Automated test suite (pytest)
 ├── hotkey.py        Global quit shortcut (Ctrl+Shift+Q)
 ├── setup.bat / check.bat / run.bat / gpu_voice.bat
-├── startup_on.bat / startup_off.bat / autostart.bat   (start with Windows)
+├── tray.py          system-tray icon (Show PIN / Open log / Quit) + "Kageon is running" notification
+├── startup_on.bat / startup_off.bat / autostart.bat   (start with Windows, in the tray)
 └── requirements.txt
 ```
 
@@ -93,9 +94,16 @@ netsh advfirewall firewall add rule name="Kageon UDP" dir=in action=allow protoc
 ```
 
 ### Start automatically with Windows
-Run `startup_on.bat` once. From then on Kageon starts **minimized** about 15 seconds after you log in
-(the taskbar window titled *Kageon* shows the PIN and logs). `startup_off.bat` turns it off.
-If Ollama is still starting up, Kageon waits for it automatically.
+Run `startup_on.bat` once. From then on Kageon starts **in the system tray** about 15 seconds after you log in
+(`AUTOSTART_DELAY`): there is **no window** that could be closed by mistake. A Windows notification says
+*"Kageon is running"* with the tablet PIN, and a **cyan crescent icon** sits near the clock (click **^** if Windows
+hides it; drag it onto the taskbar to keep it visible). Right-click the icon for **Show PIN**, **Open log**
+(everything the window used to show is in `data/kageon.log`) and **Quit Kageon**.
+`startup_off.bat` turns auto-start off. If Ollama is still starting up, Kageon waits for it automatically.
+Starting a second copy (e.g. `run.bat` while the tray one runs) just shows *"Kageon is already running"*.
+
+After updating from an older version, run `pip install -r requirements.txt` (or `setup.bat`) once for the tray
+package, then `startup_on.bat` once so the shortcut uses the new window-less start.
 
 ### Getting updates
 Inside the `ai-command-center` folder, run `git pull` (or click **Sync / Pull** in VS Code's Source Control panel), then restart Kageon.
@@ -158,7 +166,7 @@ The server window logs every step, plus a **timing line** for each command, e.g.
 `Timing: you spoke 1.8s | speech-to-text 0.45s (cpu) | Kageon 0.00s (rules) | voice 0.80s | reply started 2.0s after you stopped talking`.
 That shows exactly which stage is slow.
 
-**Quit Kageon:** press **Ctrl+Shift+Q** from any app (change it with `QUIT_HOTKEY` in `.env`), or press Ctrl+C in the server window.
+**Quit Kageon:** press **Ctrl+Shift+Q** from any app (change it with `QUIT_HOTKEY` in `.env`), right-click the tray icon → **Quit Kageon**, or press Ctrl+C in the server window.
 
 ### Speed tips
 - Simple commands (open / close / volume / media / yes / no) skip the AI model and run instantly ("via rules" in the log).
@@ -306,6 +314,8 @@ Copy `backend/.env.example` → `backend/.env` (`setup.bat` does this). The most
 | `MIC_DEVICE` | Windows default | number from `check.bat` |
 | `DRY_RUN` | `false` | `true` = log actions only |
 | `QUIT_HOTKEY` | `ctrl+shift+q` | global shortcut to shut Kageon down |
+| `TRAY_ENABLED` | `true` | crescent icon near the clock + "Kageon is running" notification |
+| `AUTOSTART_DELAY` | `15` | seconds to wait after Windows login before starting |
 | `END_SILENCE_MS` | `700` | silence needed before Kageon processes your command |
 | `FAST_COMMANDS` | `true` | instant local handling of simple commands |
 | `OLLAMA_KEEP_ALIVE` | `-1` | keep the model loaded in VRAM forever (no reload delay) |

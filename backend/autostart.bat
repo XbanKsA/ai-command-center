@@ -1,8 +1,5 @@
 @echo off
-REM ==== Launched automatically at Windows login (see startup_on.bat). Don't run by hand - use run.bat ====
-title Kageon
+REM ==== Old auto-start entry point. startup_on.bat now starts Kageon directly with pythonw.exe (no window). ====
+REM This file stays so an older Startup shortcut still works: it starts Kageon in the tray and closes at once.
 cd /d "%~dp0"
-REM give Windows a few seconds to bring up Wi-Fi, audio and Ollama
-timeout /t 15 /nobreak >nul
-call .venv\Scripts\activate.bat
-python main.py
+start "" ".venv\Scripts\pythonw.exe" main.py --autostart

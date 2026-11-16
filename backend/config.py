@@ -148,6 +148,10 @@ class Settings:
     fast_commands: bool = field(default_factory=lambda: _get_bool("FAST_COMMANDS", True))
     # global keyboard shortcut that shuts Kageon down (blank = disabled)
     quit_hotkey: str = field(default_factory=lambda: _get("QUIT_HOTKEY", "ctrl+shift+q"))
+    # crescent icon near the clock with Show PIN / Open log / Quit, plus a "Kageon is running" notification
+    tray_enabled: bool = field(default_factory=lambda: _get_bool("TRAY_ENABLED", True))
+    # seconds to wait after Windows login before starting (Wi-Fi, audio and Ollama need a moment)
+    autostart_delay: int = field(default_factory=lambda: _get_int("AUTOSTART_DELAY", 15))
 
     # --- Memory (stays on this PC: data/memory.db) ---
     memory_enabled: bool = field(default_factory=lambda: _get_bool("MEMORY_ENABLED", True))
