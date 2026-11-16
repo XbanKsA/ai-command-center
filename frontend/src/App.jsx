@@ -16,6 +16,7 @@ import Backdrop from './components/Backdrop'
 import Rail from './components/Rail'
 import TopBar from './components/TopBar'
 import { SCREENS } from './screens'
+import { Plus } from 'lucide-react'
 const AOD_AFTER_MS = 60 * 1000 // 60 seconds
 
 function App() {
@@ -84,7 +85,7 @@ function App() {
         {screen === 'deck' && (
           <div className="flex min-h-0 flex-1 flex-col gap-4">
             <div className="flex items-end justify-between">
-              <div>
+              <div className="reveal">
                 <h1 className="font-display text-4xl font-medium">Deck</h1>
                 <p className="mt-1 text-sm text-low">Tap a key to run it</p>
               </div>
@@ -92,7 +93,7 @@ function App() {
                 <Stats t={telemetry} />
                 <button
                   onClick={() => setEditMode(!editMode)}
-                  className={`h-11 rounded-xl border px-4 text-sm font-semibold ${editMode ? 'border-accent-line bg-accent-soft text-accent-text' : 'border-line bg-card'}`}
+                  className={`press h-11 rounded-xl border px-4 text-sm font-semibold ${editMode ? 'border-accent-line bg-accent-soft text-accent-text' : 'border-line bg-card'}`}
                 >
                   {editMode ? 'Done' : 'Edit'}
                 </button>
@@ -102,14 +103,24 @@ function App() {
             <main className="grid min-h-0 flex-1 grid-cols-5 grid-rows-3 gap-3">
               {slots.map((k, i) =>
                 k ? (
-                  <Key key={i} title={k.title} subtitle={k.subtitle} onPress={() => pressSlot(i)} />
+                  <Key
+                    key={i}
+                    index={i}
+                    title={k.title}
+                    subtitle={k.subtitle}
+                    action={k.action}
+                    editing={editMode}
+                    onPress={() => pressSlot(i)}
+                  />
                 ) : (
                   <button
                     key={i}
                     onClick={() => pressSlot(i)}
-                    className="rounded-2xl border-2 border-dashed border-slate-800 text-slate-500 hover:border-slate-600"
+                    style={{ '--i': i }}
+                    className="press reveal flex items-center justify-center gap-2 rounded-2xl border border-dashed border-line text-sm text-low"
                   >
-                    + Add key
+                    <Plus className="h-5 w-5" strokeWidth={1.75} />
+                    Add key
                   </button>
                 )
               )}

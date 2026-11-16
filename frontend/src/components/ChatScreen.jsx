@@ -40,7 +40,7 @@ function ChatScreen({ messages, onSend, onVoice, onConfirm, onClose }) {
     <div className="fixed inset-0 z-10 flex flex-col gap-4 bg-black p-6 text-white">
       <header className="flex items-center gap-4">
         <button onClick={onClose} aria-label="Back" className="h-12 w-12 rounded-xl border border-slate-800 text-xl">←</button>
-        <h2 className="text-2xl font-bold tracking-[0.3em] text-cyan-400">KAGEON</h2>
+        <h2 className="text-2xl font-bold tracking-[0.3em] text-cyan-400">Kageon</h2>
       </header>
 
       <div className="flex min-h-0 flex-1 gap-6">
@@ -81,7 +81,7 @@ function ChatScreen({ messages, onSend, onVoice, onConfirm, onClose }) {
         <input
           value={text}
           onChange={(e) => setText(e.target.value)}
-          placeholder="Type to KAGEON…"
+          placeholder="Type to Kageon…"
           className="h-14 flex-1 rounded-2xl border border-slate-800 bg-slate-950 px-5 text-lg outline-none focus:border-cyan-400"
         />
         <button type="submit" className="h-14 rounded-2xl border border-slate-700 px-6">Send</button>

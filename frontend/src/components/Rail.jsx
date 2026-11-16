@@ -17,7 +17,7 @@ function Rail({ screen, onChange }) {
             key={s.id}
             onClick={() => onChange(s.id)}
             aria-label={s.label}
-            className={`flex h-11 w-11 items-center justify-center rounded-xl transition-colors duration-300 ${active ? 'bg-accent-soft text-accent-text' : 'text-low'}`}
+            className={`press flex h-11 w-11 items-center justify-center rounded-xl transition-colors duration-300 ${active ? 'bg-accent-soft text-accent-text' : 'text-low'}`}
           >
             <Icon className="h-5 w-5" strokeWidth={1.75} />
           </button>

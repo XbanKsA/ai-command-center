@@ -55,3 +55,54 @@
 html {
   font-size: clamp(14px, 1.25vw, 22px);
 }
+/* 5. MOTION: the three speeds of the app */
+:root {
+  --press: 0.16s;  /* a tap */
+  --reveal: 0.5s;  /* things arriving on screen (staggered, all done in under 1s) */
+  --scene: 1.4s;   /* big changes, like the always-on display */
+}
+
+button {
+  -webkit-tap-highlight-color: transparent;
+}
+
+@layer components {
+  /* press: a quick flash in the accent colour, on any element with class "press" */
+  .press {
+    position: relative;
+    overflow: hidden;
+  }
+  .press::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    background: var(--accent-text);
+    opacity: 0;
+    transition: opacity var(--press) ease-out;
+    pointer-events: none;
+  }
+  .press:active::after {
+    opacity: 0.34;
+    transition: none;
+  }
+
+  /* reveal: fade in, slide up and sharpen. --i makes each item start a little later */
+  .reveal {
+    animation: reveal var(--reveal) cubic-bezier(0.2, 0.7, 0.2, 1) both;
+    animation-delay: calc(0.1s + var(--i, 0) * 0.02s);
+  }
+}
+
+@keyframes reveal {
+  from {
+    opacity: 0;
+    transform: translateY(0.75rem);
+    filter: blur(0.6rem);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+    filter: blur(0);
+  }
+}

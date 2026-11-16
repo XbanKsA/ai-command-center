@@ -13,7 +13,7 @@ function TopBar({ title, mode, onMode, onAsk }) {
         <span className="font-semibold text-hi">{title}</span>
       </div>
 
-      <button onClick={onAsk} className="ml-2.5 flex h-11 w-70 items-center gap-2 rounded-xl bg-well px-3 text-sm text-low">
+        <button onClick={onAsk} className="press ml-2.5 flex h-11 w-70 items-center gap-2 rounded-xl bg-well px-3 text-sm text-low">
         <Search className="h-4 w-4" />
         Ask Kageon…
       </button>
@@ -34,7 +34,7 @@ function TopBar({ title, mode, onMode, onAsk }) {
           </span>
           <button
             onClick={() => onMode(gaming ? 'auto' : 'gaming')}
-            className={`h-11 rounded-xl border px-4 text-sm font-semibold ${gaming ? 'border-transparent bg-amber-400 text-black' : 'border-line bg-card'}`}
+            className={`press h-11 rounded-xl border px-4 text-sm font-semibold ${gaming ? 'border-transparent bg-amber-400 text-black' : 'border-line bg-card'}`}
           >
             Gaming
           </button>
