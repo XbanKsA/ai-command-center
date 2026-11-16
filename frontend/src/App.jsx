@@ -4,7 +4,6 @@ import KeyEditor from './components/KeyEditor'
 import ReplyToast from './components/ReplyToast'
 import { useKageon } from './useKageon'
 import PinScreen from './components/PinScreen'
-import Stats from './components/Stats'
 import Clock from './components/Clock'
 import Key from './components/Key'
 import ModeToggle from './components/ModeToggle'
@@ -17,6 +16,10 @@ import Rail from './components/Rail'
 import TopBar from './components/TopBar'
 import { SCREENS } from './screens'
 import { Plus } from 'lucide-react'
+import PcCard from './components/PcCard'
+import MediaCard from './components/MediaCard'
+import TalkCard from './components/TalkCard'
+
 const AOD_AFTER_MS = 60 * 1000 // 60 seconds
 
 function App() {
@@ -47,6 +50,7 @@ function App() {
     const [chatOpen, setChatOpen] = useState(false)
     const [screen, setScreen] = useState('deck')
     const title = SCREENS.find((s) => s.id === screen).label
+    const lastReply = messages.findLast((m) => m.from === 'kageon')?.text
     function openScreen(id) {
       if (id === 'assistant') setChatOpen(true) // the old chat, until we build the new Assistant screen
       else setScreen(id)
@@ -82,49 +86,54 @@ function App() {
       <div className="flex min-w-0 flex-1 flex-col gap-4">
         <TopBar title={title} mode={mode} onMode={changeMode} onAsk={() => setChatOpen(true)} />
 
-        {screen === 'deck' && (
+                {screen === 'deck' && (
           <div className="flex min-h-0 flex-1 flex-col gap-4">
             <div className="flex items-end justify-between">
               <div className="reveal">
                 <h1 className="font-display text-4xl font-medium">Deck</h1>
                 <p className="mt-1 text-sm text-low">Tap a key to run it</p>
               </div>
-              <div className="flex items-center gap-4">
-                <Stats t={telemetry} />
-                <button
-                  onClick={() => setEditMode(!editMode)}
-                  className={`press h-11 rounded-xl border px-4 text-sm font-semibold ${editMode ? 'border-accent-line bg-accent-soft text-accent-text' : 'border-line bg-card'}`}
-                >
-                  {editMode ? 'Done' : 'Edit'}
-                </button>
-              </div>
+              <button
+                onClick={() => setEditMode(!editMode)}
+                className={`press h-11 rounded-xl border px-4 text-sm font-semibold ${editMode ? 'border-accent-line bg-accent-soft text-accent-text' : 'border-line bg-card'}`}
+              >
+                {editMode ? 'Done' : 'Edit'}
+              </button>
             </div>
 
-            <main className="grid min-h-0 flex-1 grid-cols-5 grid-rows-3 gap-3">
-              {slots.map((k, i) =>
-                k ? (
-                  <Key
-                    key={i}
-                    index={i}
-                    title={k.title}
-                    subtitle={k.subtitle}
-                    action={k.action}
-                    editing={editMode}
-                    onPress={() => pressSlot(i)}
-                  />
-                ) : (
-                  <button
-                    key={i}
-                    onClick={() => pressSlot(i)}
-                    style={{ '--i': i }}
-                    className="press reveal flex items-center justify-center gap-2 rounded-2xl border border-dashed border-line text-sm text-low"
-                  >
-                    <Plus className="h-5 w-5" strokeWidth={1.75} />
-                    Add key
-                  </button>
-                )
-              )}
-            </main>
+            <div className="flex min-h-0 flex-1 gap-4">
+              <main className="grid min-w-0 flex-1 grid-cols-5 grid-rows-3 gap-3">
+                {slots.map((k, i) =>
+                  k ? (
+                    <Key
+                      key={i}
+                      index={i}
+                      title={k.title}
+                      subtitle={k.subtitle}
+                      action={k.action}
+                      editing={editMode}
+                      onPress={() => pressSlot(i)}
+                    />
+                  ) : (
+                    <button
+                      key={i}
+                      onClick={() => pressSlot(i)}
+                      style={{ '--i': i }}
+                      className="press reveal flex items-center justify-center gap-2 rounded-2xl border border-dashed border-line text-sm text-low"
+                    >
+                      <Plus className="h-5 w-5" strokeWidth={1.75} />
+                      Add key
+                    </button>
+                  )
+                )}
+              </main>
+
+              <aside className="flex w-68 flex-col gap-3">
+                <PcCard t={telemetry} />
+                <MediaCard onSay={ask} />
+                <TalkCard last={lastReply} onVoice={sendVoice} />
+              </aside>
+            </div>
           </div>
         )}
 

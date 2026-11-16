@@ -106,3 +106,9 @@ button {
     filter: blur(0);
   }
 }
+@layer components {
+  /* on a button that is already the accent colour, flash white instead */
+  .press.on-accent::after {
+    background: white;
+  }
+}
