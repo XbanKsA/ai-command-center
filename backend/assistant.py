@@ -21,6 +21,7 @@ import re
 import time
 import uuid
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Awaitable, Callable
 
 from executor import (SEARCH_SITES, ActionResult, AppEntry, Executor, normalize, resolve_browser,
@@ -305,6 +306,30 @@ def is_model_question(text: str) -> bool:
 def wants_thinking(text: str) -> bool:
     n = normalize(text)
     return any(normalize(t) in n for t in THINK_TRIGGERS)
+
+
+# ------------------------------------------------------------------ date / time
+# The language model has no clock (it once said "October 24, 2023"), so these are answered from the PC clock.
+_DAYS = ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")
+_MONTHS = ("January", "February", "March", "April", "May", "June", "July", "August", "September",
+           "October", "November", "December")
+_WHEN = r"(?:\s+(?:now|right now|today|of today|is it|is it today|is it now))?"
+TIME_RE = re.compile(_WAKE_PREFIX + _POLITE + r"(?:tell me\s+)?(?:what\s+(?:s\s+|is\s+)?(?:the\s+)?(?:current\s+)?time"
+                     r"|the\s+time|current\s+time|time)" + _WHEN + r"(?:\s+please)?$")
+DATE_RE = re.compile(_WAKE_PREFIX + _POLITE + r"(?:tell me\s+)?(?:what\s+(?:s\s+|is\s+)?(?:the\s+)?(?:date|day)"
+                     r"|what\s+(?:s\s+|is\s+)?today(?:\s+s\s+date)?|today\s+s\s+date|the\s+date|which\s+day)"
+                     + _WHEN + r"(?:\s+please)?$")
+
+
+def _now() -> datetime:
+    return datetime.now()
+
+
+def clock_text(dt: datetime | None = None) -> tuple[str, str]:
+    """-> ("Monday, November 16, 2026", "10:32 PM"); no locale or Windows strftime quirks."""
+    dt = dt or _now()
+    date = f"{_DAYS[dt.weekday()]}, {_MONTHS[dt.month - 1]} {dt.day}, {dt.year}"
+    return date, f"{dt.hour % 12 or 12}:{dt.minute:02d} {'AM' if dt.hour < 12 else 'PM'}"
 
 
 PLAY_RE = re.compile(_WAKE_PREFIX + _POLITE + r"(?:play|put on)\s+(?P<t>.+?)(?:\s+(?:on|in|using)\s+"
@@ -756,7 +781,11 @@ class Assistant:
         return out
 
     def _messages(self, text: str, pend: Pending | None, think: bool = False) -> list[dict]:
-        msgs = [{"role": "system", "content": SYSTEM_PROMPT}, *self._memory_context(text), *self.history]
+        date, clock = clock_text()
+        msgs = [{"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "system", "content": f"Right now it is {date}, {clock} (the user's local time). "
+                                              "Use this for anything about today, the date, the day or the time."},
+                *self._memory_context(text), *self.history]
         if think:
             msgs.append({"role": "system", "content": "The user asked you to think carefully. For chat answers, "
                          "\"reply\" may be up to 8 sentences of careful, well-reasoned analysis."})
@@ -813,6 +842,12 @@ class Assistant:
         media = _MEDIA_LOOKUP.get(norm)
         if media:
             return {**base, "intent": "media_control", "target": media}
+
+        is_time, is_date = bool(TIME_RE.match(norm)), bool(DATE_RE.match(norm))
+        if is_time or is_date:
+            date, clock = clock_text()
+            reply = f"It's {clock}." if is_time else f"Today is {date}."
+            return {**base, "intent": "chat", "target": "", "reply": reply}
 
         m = OPEN_RE.match(soft_normalize(text))
         if m:

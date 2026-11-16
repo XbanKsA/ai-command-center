@@ -581,3 +581,32 @@ def test_wake_name_is_stripped_from_commands():
         m = OPEN_RE.match(said)
         assert m and m.group("t") == "notepad", said
     assert REMEMBER_RE.match("hey kageon remember that my desk is white").group("t") == "my desk is white"
+
+
+async def test_date_and_time_come_from_the_pc_clock(make, monkeypatch):
+    from datetime import datetime
+    import assistant as amod
+    monkeypatch.setattr(amod, "_now", lambda: datetime(2026, 11, 16, 22, 32))
+    a, llm = make()
+    r = await a.handle_text("what is the date of today")
+    assert r["reply"] == "Today is Monday, November 16, 2026."
+    r = await a.handle_text("Hey Kageon, what time is it?")
+    assert r["reply"] == "It's 10:32 PM."
+    assert llm.calls == []                                   # answered instantly, no model needed
+
+
+async def test_model_is_told_the_current_date(make, monkeypatch):
+    from datetime import datetime
+    import assistant as amod
+    monkeypatch.setattr(amod, "_now", lambda: datetime(2026, 1, 5, 9, 7))
+    a, llm = make({"tokyo": intent("chat", reply="It's 3:07 PM in Tokyo.")})
+    await a.handle_text("what time is it in tokyo")
+    system = " ".join(m["content"] for m in llm.calls[0] if m["role"] == "system")
+    assert "Monday, January 5, 2026, 9:07 AM" in system
+
+
+def test_clock_text_midnight_and_noon():
+    from datetime import datetime
+    from assistant import clock_text
+    assert clock_text(datetime(2026, 3, 1, 0, 5))[1] == "12:05 AM"
+    assert clock_text(datetime(2026, 3, 1, 12, 0))[1] == "12:00 PM"
