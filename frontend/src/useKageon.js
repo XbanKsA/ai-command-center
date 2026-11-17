@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 export function useKageon(host) { 
   const [status, setStatus] = useState('connecting') // connecting , need_pin , connected , offline
   const [telemetry, setTelemetry] = useState(null)
+  const [history, setHistory] = useState([])
   const [error, setError] = useState('')
   const [reply, setReply] = useState(null)
   const [apps, setApps] = useState([])
@@ -59,6 +60,7 @@ export function useKageon(host) {
           if (!msg.ok) setReply({ text: msg.message, status: 'failed' })
         } else if (msg.type === 'telemetry') {
           setTelemetry(msg)
+          setHistory((prev) => [...prev, msg].slice(-40)) 
         }
       }
 
@@ -124,5 +126,5 @@ export function useKageon(host) {
   if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'list_apps', query }))
 }, [])
 
-      return { status, telemetry, error, sendPin, launch, ask, confirm, reply, clearReply, apps, searchApps, mode, changeMode, messages, sendVoice, media, mediaKey }
+      return { status, telemetry, error, sendPin, launch, ask, confirm, reply, clearReply, apps, searchApps, mode, changeMode, messages, sendVoice, media, mediaKey, history }
 }

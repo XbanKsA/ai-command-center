@@ -8,6 +8,7 @@ import Key from './components/Key'
 import { useIdle } from './useIdle'
 import AlwaysOn from './components/AlwaysOn'
 import AssistantScreen from './components/AssistantScreen'
+import SystemScreen from './components/SystemScreen'
 import ConnectScreen from './components/ConnectScreen'
 import Backdrop from './components/Backdrop'
 import Rail from './components/Rail'
@@ -33,7 +34,7 @@ function App() {
     localStorage.removeItem('kageon_host')
     setHost(null)
   }
-        const { status, telemetry, error, sendPin, launch, ask, confirm, reply, clearReply, apps, searchApps, mode, changeMode, messages, sendVoice, media, mediaKey } = useKageon(host)
+        const { status, telemetry, error, sendPin, launch, ask, confirm, reply, clearReply, apps, searchApps, mode, changeMode, messages, sendVoice, media, mediaKey, history} = useKageon(host)
     function runKey(k) {
       if (k.action.type === 'launch') launch(k.action.target)
       else ask(k.action.text)
@@ -158,7 +159,11 @@ function App() {
           <AssistantScreen messages={messages} onSend={ask} onVoice={sendVoice} onConfirm={confirm} />
         )}
 
-        {(screen === 'system' || screen === 'theme') && (
+        {screen === 'system' && (
+          <SystemScreen t={telemetry} history={history} mode={mode} onMode={changeMode} host={host} />
+        )}
+
+        {screen === 'theme' && (
           <div className="flex flex-1 items-center justify-center text-low">
             The {title} screen comes in a later lesson
           </div>
