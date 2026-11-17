@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { useKeys } from './useKeys'
 import KeyEditor from './components/KeyEditor'
 import ReplyToast from './components/ReplyToast'
@@ -7,7 +7,7 @@ import PinScreen from './components/PinScreen'
 import Key from './components/Key'
 import { useIdle } from './useIdle'
 import AlwaysOn from './components/AlwaysOn'
-import ChatScreen from './components/ChatScreen'
+import AssistantScreen from './components/AssistantScreen'
 import ConnectScreen from './components/ConnectScreen'
 import Backdrop from './components/Backdrop'
 import Rail from './components/Rail'
@@ -50,15 +50,14 @@ function App() {
     const firstEmpty = slots.findIndex((k) => !k)
     const [editMode, setEditMode] = useState(false)
     const [editing, setEditing] = useState(null)
-    const [chatOpen, setChatOpen] = useState(false)
     const [screen, setScreen] = useState('deck')
     const title = SCREENS.find((s) => s.id === screen).label
     const lastReply = messages.findLast((m) => m.from === 'kageon')?.text
-    function openScreen(id) {
-      if (id === 'assistant') setChatOpen(true) // the old chat, until we build the new Assistant screen
-      else setScreen(id)
-    }
     const idle = useIdle(AOD_AFTER_MS)
+
+    useEffect(() => {
+      if (screen === 'assistant' && reply) clearReply()
+    }, [screen, reply, clearReply])
     if (!host) return <ConnectScreen onFound={saveHost} />
 
   if (status === 'need_pin') return <PinScreen onSubmit={sendPin} error={error} />
@@ -84,10 +83,10 @@ function App() {
   return (
     <div className="relative isolate flex h-screen gap-4 overflow-hidden bg-page p-4 font-sans text-hi">
       <Backdrop />
-      <Rail screen={screen} onChange={openScreen} />
+      <Rail screen={screen} onChange={setScreen} />
 
       <div className="flex min-w-0 flex-1 flex-col gap-4">
-        <TopBar title={title} mode={mode} onMode={changeMode} onAsk={() => setChatOpen(true)} />
+                <TopBar title={title} mode={mode} onMode={changeMode} onAsk={() => setScreen('assistant')} />
 
                 {screen === 'deck' && (
           <div className="flex min-h-0 flex-1 flex-col gap-3">
@@ -155,21 +154,16 @@ function App() {
           </div>
         )}
 
-        {screen !== 'deck' && (
+        {screen === 'assistant' && (
+          <AssistantScreen messages={messages} onSend={ask} onVoice={sendVoice} onConfirm={confirm} />
+        )}
+
+        {(screen === 'system' || screen === 'theme') && (
           <div className="flex flex-1 items-center justify-center text-low">
             The {title} screen comes in a later lesson
           </div>
         )}
-      </div>   <ReplyToast reply={reply} onClose={clearReply} onConfirm={confirm} />
-            {chatOpen && (
-        <ChatScreen
-          messages={messages}
-          onSend={ask}
-          onVoice={sendVoice}
-          onConfirm={confirm}
-          onClose={() => setChatOpen(false)}
-        />
-      )}
+      </div>
       {idle && <AlwaysOn telemetry={telemetry} mode={mode} />}
             {editing !== null && (
         <KeyEditor
