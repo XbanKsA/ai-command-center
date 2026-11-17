@@ -81,7 +81,7 @@ function ChatScreen({ messages, onSend, onVoice, onConfirm, onClose }) {
         <input
           value={text}
           onChange={(e) => setText(e.target.value)}
-          placeholder="Type to Kageon…"
+          placeholder="Type to Kageon…" 
           className="h-14 flex-1 rounded-2xl border border-slate-800 bg-slate-950 px-5 text-lg outline-none focus:border-cyan-400"
         />
         <button type="submit" className="h-14 rounded-2xl border border-slate-700 px-6">Send</button>

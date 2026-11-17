@@ -4,9 +4,7 @@ import KeyEditor from './components/KeyEditor'
 import ReplyToast from './components/ReplyToast'
 import { useKageon } from './useKageon'
 import PinScreen from './components/PinScreen'
-import Clock from './components/Clock'
 import Key from './components/Key'
-import ModeToggle from './components/ModeToggle'
 import { useIdle } from './useIdle'
 import AlwaysOn from './components/AlwaysOn'
 import ChatScreen from './components/ChatScreen'
@@ -15,10 +13,11 @@ import Backdrop from './components/Backdrop'
 import Rail from './components/Rail'
 import TopBar from './components/TopBar'
 import { SCREENS } from './screens'
-import { Plus } from 'lucide-react'
 import PcCard from './components/PcCard'
 import MediaCard from './components/MediaCard'
 import TalkCard from './components/TalkCard'
+import { Plus, Pencil } from 'lucide-react'
+import DeckTabs from './components/DeckTabs'
 
 const AOD_AFTER_MS = 60 * 1000 // 60 seconds
 
@@ -44,7 +43,11 @@ function App() {
       if (!k || editMode) setEditing(i) // empty slot or edit mode -> open the editor
       else runKey(k)                   // normal key -> run it
     }
-    const { slots, saveKey, deleteKey } = useKeys()
+    const { decks, saveKey, deleteKey } = useKeys()
+    const [page, setPage] = useState(0)
+    const slots = decks[page].slots
+    const used = slots.filter(Boolean).length
+    const firstEmpty = slots.findIndex((k) => !k)
     const [editMode, setEditMode] = useState(false)
     const [editing, setEditing] = useState(null)
     const [chatOpen, setChatOpen] = useState(false)
@@ -87,22 +90,37 @@ function App() {
         <TopBar title={title} mode={mode} onMode={changeMode} onAsk={() => setChatOpen(true)} />
 
                 {screen === 'deck' && (
-          <div className="flex min-h-0 flex-1 flex-col gap-4">
+          <div className="flex min-h-0 flex-1 flex-col gap-3">
             <div className="flex items-end justify-between">
               <div className="reveal">
                 <h1 className="font-display text-4xl font-medium">Deck</h1>
-                <p className="mt-1 text-sm text-low">Tap a key to run it</p>
+                <p className="mt-1 text-sm text-low">
+                  {editMode ? 'Editing: tap a key to change it' : `${used} keys on this page · tap one to run it`}
+                </p>
               </div>
-              <button
-                onClick={() => setEditMode(!editMode)}
-                className={`press h-11 rounded-xl border px-4 text-sm font-semibold ${editMode ? 'border-accent-line bg-accent-soft text-accent-text' : 'border-line bg-card'}`}
-              >
-                {editMode ? 'Done' : 'Edit'}
-              </button>
+              <div className="reveal flex gap-2.5">
+                <button
+                  onClick={() => setEditMode(!editMode)}
+                  className={`press flex h-11 items-center gap-2 rounded-xl border px-4 text-sm font-semibold ${editMode ? 'border-accent-line bg-accent-soft text-accent-text' : 'border-line bg-card'}`}
+                >
+                  <Pencil className="h-4 w-4" strokeWidth={1.75} />
+                  {editMode ? 'Done' : 'Edit'}
+                </button>
+                <button
+                  onClick={() => setEditing(firstEmpty)}
+                  disabled={firstEmpty === -1}
+                  className="press on-accent flex h-11 items-center gap-2 rounded-xl bg-accent px-4 text-sm font-semibold text-accent-ink disabled:opacity-40"
+                >
+                  <Plus className="h-4 w-4" strokeWidth={1.75} />
+                  New key
+                </button>
+              </div>
             </div>
 
+            <DeckTabs decks={decks} page={page} onChange={setPage} />
+
             <div className="flex min-h-0 flex-1 gap-4">
-              <main className="grid min-w-0 flex-1 grid-cols-5 grid-rows-3 gap-3">
+               <main key={page} className="grid min-w-0 flex-1 grid-cols-5 grid-rows-3 gap-3">
                 {slots.map((k, i) =>
                   k ? (
                     <Key
@@ -158,8 +176,8 @@ function App() {
           initial={slots[editing]}
           apps={apps}
           onSearchApps={searchApps}
-          onSave={(k) => { saveKey(editing, k); setEditing(null) }}
-          onDelete={() => { deleteKey(editing); setEditing(null) }}
+          onSave={(k) => { saveKey(page, editing, k); setEditing(null) }}
+          onDelete={() => { deleteKey(page, editing); setEditing(null) }}
           onCancel={() => setEditing(null)}
         />
       )}
