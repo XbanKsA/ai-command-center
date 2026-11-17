@@ -112,3 +112,26 @@ button {
     background: white;
   }
 }
+/* popups: the dark backdrop fades in, the box rises into place */
+@layer components {
+  .fade-in {
+    animation: fade-in 0.3s ease both;
+  }
+  .rise {
+    animation: rise var(--reveal) cubic-bezier(0.2, 0.7, 0.2, 1) both;
+  }
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+}
+
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(1.75rem) scale(0.97);
+    filter: blur(0.5rem);
+  }
+}
