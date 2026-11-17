@@ -191,3 +191,25 @@ def test_memory_api(client):
     assert client.post("/api/routines", json={"trigger": "x", "steps": []}, headers=h).status_code == 400
     st = client.get("/api/status", headers=h).json()
     assert st["memory"]["facts"] == 0 and st["memory"]["conversations"] >= 1
+
+
+def test_media_key_is_silent_and_state_is_sent_on_connect(client):
+    ws = pair_ws(client)
+    try:
+        assert ws.receive_json()["type"] == "auth_ok"
+        media = recv_until(ws, "media")
+        assert media["available"] is False          # no Windows media controls in tests
+        ws.send_json({"type": "media_key", "key": "volume_up", "request_id": "m1"})
+        res = recv_until(ws, "media_result")
+        assert res["ok"] and res["key"] == "volume_up" and res["request_id"] == "m1"
+        ws.send_json({"type": "media_key", "key": "explode"})
+        assert recv_until(ws, "media_result")["ok"] is False
+        # nothing went through the assistant, so the chat stays clean
+        ws.send_json({"type": "ping", "request_id": "p"})
+        for _ in range(20):
+            m = ws.receive_json()
+            assert m["type"] != "assistant_reply"
+            if m["type"] == "pong":
+                break
+    finally:
+        ws.__exit__(None, None, None)

@@ -18,6 +18,8 @@ WebSocket protocol (ws://<pc-ip>:8765/ws) -- all messages are JSON objects with 
   {"type":"list_apps","query":"chr"}                 {"type":"apps","apps":[...]}
   {"type":"get_mode"}                                {"type":"mode","label":"qwen3.5:4b, Gaming mode (auto)",...}
   {"type":"set_mode","mode":"auto|gaming|normal"}    {"type":"mode", ...}   (also pushed on every change)
+  {"type":"media_key","key":"play_pause"}            {"type":"media_result","key":..,"ok":..}  (silent: no chat)
+                                                     {"type":"media","playing":..,"title":..}  (pushed on change)
                                                      {"type":"telemetry", ...}   (pushed every 1.5 s)
                                                      {"type":"assistant_event", ...} (PC voice activity)
 """
@@ -44,6 +46,7 @@ from hotkey import GlobalHotkey
 from hub import Client, Hub
 from assistant import Assistant
 from llm import OllamaClient
+from media_watch import MediaWatcher
 from memory import MemoryStore
 from modes import ModeManager
 from telemetry import TelemetryCollector
@@ -122,6 +125,8 @@ class State:
     hotkey: GlobalHotkey | None = None
     modes: ModeManager
     memory: MemoryStore | None = None
+    media: MediaWatcher
+    media_state: dict
     tasks: list[asyncio.Task]
 
 
@@ -149,6 +154,8 @@ def create_app(settings: Settings | None = None, llm: OllamaClient | None = None
         st.llm = llm or OllamaClient(settings.ollama_url, settings.model_normal, settings.ollama_timeout,
                                      settings.ollama_keep_alive, settings.think_default, settings.think_timeout)
         st.hub = Hub()
+        st.media = MediaWatcher()
+        st.media_state = {"available": False}
         st.voice = VoiceEngine(settings, loop, on_command=lambda text: st.assistant.handle_text(text, "voice"),
                                vram_reader=st.telemetry.vram_info)
 
@@ -171,6 +178,8 @@ def create_app(settings: Settings | None = None, llm: OllamaClient | None = None
 
         st.tasks.append(asyncio.create_task(asyncio.to_thread(st.executor.apps.refresh)))
         st.tasks.append(asyncio.create_task(telemetry_loop()))
+        if background:
+            st.tasks.append(asyncio.create_task(media_loop()))
 
         if background and settings.discovery_enabled:
             st.discovery = DiscoveryService(settings.discovery_port, settings.port, settings.server_name,
@@ -221,6 +230,22 @@ def create_app(settings: Settings | None = None, llm: OllamaClient | None = None
             except Exception as exc:
                 log.debug("telemetry loop: %s", exc)
             await asyncio.sleep(settings.telemetry_interval)
+
+    async def refresh_media() -> None:
+        """Read what's playing; tell the tablets only when it changed."""
+        state = await st.media.read()
+        if state != st.media_state:
+            st.media_state = state
+            await st.hub.broadcast({"type": "media", **state})
+
+    async def media_loop():
+        while True:
+            try:
+                if st.hub.clients:
+                    await refresh_media()
+            except Exception as exc:
+                log.debug("media loop: %s", exc)
+            await asyncio.sleep(settings.media_interval)
 
     app = FastAPI(title="Kageon Core", version=VERSION, lifespan=lifespan)
     app.state.core = st
@@ -435,6 +460,7 @@ def create_app(settings: Settings | None = None, llm: OllamaClient | None = None
         st.hub.add(client)
         await st.hub.send(client, {"type": "telemetry", **st.telemetry.snapshot()})
         await st.hub.send(client, {"type": "mode", **st.modes.status()})
+        await st.hub.send(client, {"type": "media", **st.media_state})
         pending_tasks: set[asyncio.Task] = set()
 
         def spawn(coro):
@@ -456,6 +482,14 @@ def create_app(settings: Settings | None = None, llm: OllamaClient | None = None
                 await st.hub.send(client, {"type": "mode", "request_id": rid, **state})
             except ValueError as exc:
                 await st.hub.send(client, {"type": "error", "request_id": rid, "error": str(exc)})
+
+        async def do_media_key(key: str, rid):
+            res = await asyncio.to_thread(st.executor.media, key)
+            await st.hub.send(client, {"type": "media_result", "request_id": rid, "key": key, "ok": res.ok,
+                                       "message": res.message})
+            if res.ok and background:
+                await asyncio.sleep(0.4)  # give the player a moment, then show its new state
+                await refresh_media()
 
         async def do_launch(target: str, rid):
             res = await asyncio.to_thread(st.executor.launch_target, target)
@@ -488,6 +522,8 @@ def create_app(settings: Settings | None = None, llm: OllamaClient | None = None
                     await st.hub.send(client, {"type": "mode", "request_id": rid, **st.modes.status()})
                 elif t == "set_mode":
                     spawn(do_set_mode(str(msg.get("mode", "")), rid))
+                elif t == "media_key":
+                    spawn(do_media_key(str(msg.get("key", "")), rid))
                 elif t == "list_apps":
                     await st.hub.send(client, {"type": "apps", "request_id": rid,
                                                "apps": st.executor.apps.search(str(msg.get("query", "")))})

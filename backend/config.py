@@ -99,6 +99,7 @@ class Settings:
 
     # --- Telemetry ---
     telemetry_interval: float = field(default_factory=lambda: _get_float("TELEMETRY_INTERVAL", 1.5))
+    media_interval: float = field(default_factory=lambda: _get_float("MEDIA_INTERVAL", 1.0))  # now-playing check
 
     # --- Local AI (Ollama) ---
     ollama_url: str = field(default_factory=lambda: _get("OLLAMA_URL", "http://127.0.0.1:11434"))
