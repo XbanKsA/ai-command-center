@@ -4,8 +4,8 @@ function Card({ title, note, delay = 0, className = '', children }) {
     <section style={{ '--i': delay }} className={`reveal rounded-2xl border border-line bg-card p-4 ${className}`}>
       {title && (
         <div className="mb-3 flex items-baseline justify-between">
-          <h2 className="text-sm font-semibold">{title}</h2>
-          {note && <span className="text-xs text-low">{note}</span>}
+          <h2 className="min-w-0 truncate text-sm font-semibold">{title}</h2>
+          {note && <span className="ml-3 shrink-0 text-xs text-low">{note}</span>}
         </div>
       )}
       {children}

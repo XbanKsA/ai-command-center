@@ -7,6 +7,7 @@ export function useKageon(host) {
   const [reply, setReply] = useState(null)
   const [apps, setApps] = useState([])
   const [mode, setModeInfo] = useState(null)
+  const [media, setMedia] = useState(null)
   const socketRef = useRef(null)
   const [messages, setMessages] = useState([])
 
@@ -52,6 +53,10 @@ export function useKageon(host) {
           setApps(msg.apps)
         } else if (msg.type === 'mode') {
           setModeInfo(msg)
+        } else if (msg.type === 'media') {
+          setMedia(msg)
+        } else if (msg.type === 'media_result') {
+          if (!msg.ok) setReply({ text: msg.message, status: 'failed' })
         } else if (msg.type === 'telemetry') {
           setTelemetry(msg)
         }
@@ -85,6 +90,7 @@ export function useKageon(host) {
     send({ type: 'chat', text })
   }
   function changeMode(m) { send({ type: 'set_mode', mode: m }) }
+  function mediaKey(key) { send({ type: 'media_key', key }) }
   function confirm(pendingId, approve) {
     setMessages((prev) => prev.map((m) => (m.pendingId === pendingId ? { ...m, pendingId: null } : m)))
     send({ type: 'confirm', pending_id: pendingId, approve })
@@ -118,5 +124,5 @@ export function useKageon(host) {
   if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'list_apps', query }))
 }, [])
 
-      return { status, telemetry, error, sendPin, launch, ask, confirm, reply, clearReply, apps, searchApps, mode, changeMode, messages, sendVoice }
+      return { status, telemetry, error, sendPin, launch, ask, confirm, reply, clearReply, apps, searchApps, mode, changeMode, messages, sendVoice, media, mediaKey }
 }

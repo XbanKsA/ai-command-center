@@ -33,7 +33,7 @@ function App() {
     localStorage.removeItem('kageon_host')
     setHost(null)
   }
-        const { status, telemetry, error, sendPin, launch, ask, confirm, reply, clearReply, apps, searchApps, mode, changeMode, messages, sendVoice } = useKageon(host)
+        const { status, telemetry, error, sendPin, launch, ask, confirm, reply, clearReply, apps, searchApps, mode, changeMode, messages, sendVoice, media, mediaKey } = useKageon(host)
     function runKey(k) {
       if (k.action.type === 'launch') launch(k.action.target)
       else ask(k.action.text)
@@ -148,7 +148,7 @@ function App() {
 
               <aside className="flex w-68 flex-col gap-3">
                 <PcCard t={telemetry} />
-                <MediaCard onSay={ask} />
+                <MediaCard media={media} onKey={mediaKey} />
                 <TalkCard last={lastReply} onVoice={sendVoice} />
               </aside>
             </div>
