@@ -4,6 +4,8 @@ export function useKageon(host) {
   const [status, setStatus] = useState('connecting') // connecting , need_pin , connected , offline
   const [telemetry, setTelemetry] = useState(null)
   const [history, setHistory] = useState([])
+  const [coreVersion, setCoreVersion] = useState('')
+  const pongWaiter = useRef(null)
   const [error, setError] = useState('')
   const [reply, setReply] = useState(null)
   const [apps, setApps] = useState([])
@@ -29,6 +31,7 @@ export function useKageon(host) {
         const msg = JSON.parse(event.data)
 
         if (msg.type === 'hello') {
+          setCoreVersion(msg.version)
           const token = localStorage.getItem('kageon_token')
           if (token) ws.send(JSON.stringify({ type: 'auth', token }))
           else setStatus('need_pin')
@@ -54,6 +57,8 @@ export function useKageon(host) {
           setApps(msg.apps)
         } else if (msg.type === 'mode') {
           setModeInfo(msg)
+        } else if (msg.type === 'pong') {
+          pongWaiter.current?.()
         } else if (msg.type === 'media') {
           setMedia(msg)
         } else if (msg.type === 'media_result') {
@@ -119,6 +124,25 @@ export function useKageon(host) {
       addMessage({ from: 'kageon', text: `Voice failed: ${err.message}` })
     }
   }
+    // send a ping and time the answer: resolves to milliseconds, or null if the PC didn't answer in 3 s
+  const testConnection = useCallback(() => {
+    return new Promise((resolve) => {
+      const started = performance.now()
+      const timer = setTimeout(() => {
+        pongWaiter.current = null
+        resolve(null)
+      }, 3000)
+      pongWaiter.current = () => {
+        clearTimeout(timer)
+        pongWaiter.current = null
+        resolve(Math.round(performance.now() - started))
+      }
+      const ws = socketRef.current
+      if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'ping' }))
+    })
+  }, [])
+
+
 
   const clearReply = useCallback(() => setReply(null), [])
   const searchApps = useCallback((query) => {
@@ -126,5 +150,5 @@ export function useKageon(host) {
   if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'list_apps', query }))
 }, [])
 
-      return { status, telemetry, error, sendPin, launch, ask, confirm, reply, clearReply, apps, searchApps, mode, changeMode, messages, sendVoice, media, mediaKey, history }
+      return { status, telemetry, error, sendPin, launch, ask, confirm, reply, clearReply, apps, searchApps, mode, changeMode, messages, sendVoice, media, mediaKey, history, coreVersion, testConnection }
 }

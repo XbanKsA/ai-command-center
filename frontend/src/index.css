@@ -179,3 +179,174 @@ button {
     box-shadow: 0 2px 8px oklch(0 0 0 / 0.4);
   }
 }
+/* CONNECTION DIAGRAM: one lane per way of connecting (Wi-Fi, USB) between the tablet and the PC */
+@layer components {
+  .link {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    height: 4.5rem;
+  }
+  .link-wire {
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: 1.45rem;
+    height: 2px;
+    border-radius: 1px;
+    background: var(--line);
+  }
+  .link-point {
+    position: relative;
+    z-index: 1;
+    width: 3rem;
+    height: 3rem;
+    border-radius: 9999px;
+    border: 1.5px solid var(--line);
+    background: var(--card-solid);
+    color: var(--low);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition:
+      background-color 0.4s,
+      color 0.4s,
+      border-color 0.4s;
+  }
+  .link-label {
+    margin-top: 0.3rem;
+    font-size: 0.75rem;
+    color: var(--low);
+  }
+  .link-spin {
+    position: absolute;
+    z-index: 1;
+    top: -0.3rem;
+    left: 50%;
+    width: 3.6rem;
+    height: 3.6rem;
+    margin-left: -1.8rem;
+    border-radius: 9999px;
+    border: 2px solid transparent;
+    border-top-color: var(--accent-text);
+    border-right-color: var(--accent-text);
+    opacity: 0;
+    pointer-events: none;
+  }
+  .link-dot {
+    position: absolute;
+    top: 1.2rem;
+    left: 0;
+    width: 0.5rem;
+    height: 0.5rem;
+    border-radius: 9999px;
+    background: var(--accent-text);
+    opacity: 0;
+    pointer-events: none;
+  }
+
+  /* trying: the wire marches towards the PC and a ring spins round the point */
+  .link.trying .link-wire {
+    background: repeating-linear-gradient(90deg, var(--accent-text) 0 0.5rem, transparent 0.5rem 1rem);
+    animation: link-march 0.45s linear infinite;
+  }
+  .link.trying .link-point {
+    border-color: var(--accent-line);
+    color: var(--accent-text);
+  }
+  .link.trying .link-spin {
+    opacity: 1;
+    animation: link-spin 0.8s linear infinite;
+  }
+
+  /* connected (keeps going): the point breathes and dots travel both ways along the wire */
+  .link.on .link-wire {
+    background: var(--accent-line);
+  }
+  .link.on .link-point {
+    background: var(--accent);
+    border-color: transparent;
+    color: var(--accent-ink);
+    animation: link-breathe 2.4s ease-in-out infinite;
+  }
+  .link.on .link-label {
+    color: var(--hi);
+  }
+  .link.on .to-pc {
+    animation: link-to-pc 2.4s linear infinite;
+  }
+  .link.on .to-tablet {
+    animation: link-to-tablet 2.4s linear 1.2s infinite;
+  }
+
+  /* failed: red, with one shake */
+  .link.failed .link-wire {
+    background: oklch(0.64 0.21 25);
+  }
+  .link.failed .link-point {
+    border-color: oklch(0.64 0.21 25);
+    color: oklch(0.7 0.19 25);
+    animation: link-shake 0.4s ease;
+  }
+  .link.failed .link-label {
+    color: oklch(0.7 0.19 25);
+  }
+
+  /* not available (yet) */
+  .link.off {
+    opacity: 0.45;
+  }
+}
+
+@keyframes link-march {
+  to {
+    background-position: 1rem 0;
+  }
+}
+@keyframes link-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@keyframes link-breathe {
+  50% {
+    box-shadow: 0 0 0 0.6rem var(--accent-soft);
+  }
+}
+@keyframes link-to-pc {
+  0% {
+    left: 0;
+    opacity: 0;
+  }
+  15%,
+  85% {
+    opacity: 1;
+  }
+  100% {
+    left: calc(100% - 0.5rem);
+    opacity: 0;
+  }
+}
+@keyframes link-to-tablet {
+  0% {
+    left: calc(100% - 0.5rem);
+    opacity: 0;
+  }
+  15%,
+  85% {
+    opacity: 1;
+  }
+  100% {
+    left: 0;
+    opacity: 0;
+  }
+}
+@keyframes link-shake {
+  25% {
+    transform: translateX(-0.3rem);
+  }
+  75% {
+    transform: translateX(0.3rem);
+  }
+}

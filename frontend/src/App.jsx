@@ -11,6 +11,7 @@ import AssistantScreen from './components/AssistantScreen'
 import SystemScreen from './components/SystemScreen'
 import ThemeScreen from './components/ThemeScreen'
 import { useTheme } from './useTheme'
+import SettingsPopup from './components/SettingsPopup'
 import ConnectScreen from './components/ConnectScreen'
 import Backdrop from './components/Backdrop'
 import Rail from './components/Rail'
@@ -34,9 +35,10 @@ function App() {
 
   function forgetHost() {
     localStorage.removeItem('kageon_host')
+    localStorage.removeItem('kageon_token')
     setHost(null)
   }
-        const { status, telemetry, error, sendPin, launch, ask, confirm, reply, clearReply, apps, searchApps, mode, changeMode, messages, sendVoice, media, mediaKey, history} = useKageon(host)
+        const { status, telemetry, error, sendPin, launch, ask, confirm, reply, clearReply, apps, searchApps, mode, changeMode, messages, sendVoice, media, mediaKey, history, coreVersion, testConnection } = useKageon(host)
     function runKey(k) {
       if (k.action.type === 'launch') launch(k.action.target)
       else ask(k.action.text)
@@ -54,6 +56,7 @@ function App() {
     const [editMode, setEditMode] = useState(false)
     const [editing, setEditing] = useState(null)
     const [screen, setScreen] = useState('deck')
+    const [settingsOpen, setSettingsOpen] = useState(false)
     const title = SCREENS.find((s) => s.id === screen).label
     const lastReply = messages.findLast((m) => m.from === 'kageon')?.text
     const idle = useIdle(AOD_AFTER_MS)
@@ -87,7 +90,7 @@ function App() {
   return (
     <div className="relative isolate flex h-screen gap-4 overflow-hidden bg-page p-4 font-sans text-hi">
       <Backdrop />
-      <Rail screen={screen} onChange={setScreen} />
+      <Rail screen={screen} onChange={setScreen} onSettings={() => setSettingsOpen(true)} />
 
       <div className="flex min-w-0 flex-1 flex-col gap-4">
                 <TopBar title={title} mode={mode} onMode={changeMode} onAsk={() => setScreen('assistant')} />
@@ -168,6 +171,16 @@ function App() {
 
         {screen === 'theme' && <ThemeScreen theme={theme} onChange={changeTheme} onReset={resetTheme} />}
       </div>
+      {settingsOpen && (
+        <SettingsPopup
+          host={host}
+          coreVersion={coreVersion}
+          onTest={testConnection}
+          onForget={() => { setSettingsOpen(false); forgetHost() }}
+          onClose={() => setSettingsOpen(false)}
+        />
+      )}
+      {idle && <AlwaysOn telemetry={telemetry} mode={mode} />}
       {idle && <AlwaysOn telemetry={telemetry} mode={mode} />}
             {editing !== null && (
         <KeyEditor

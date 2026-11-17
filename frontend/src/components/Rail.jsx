@@ -1,6 +1,7 @@
+import { Settings2 } from 'lucide-react'
 import { SCREENS } from '../screens'
 
-function Rail({ screen, onChange }) {
+function Rail({ screen, onChange, onSettings }) {
   return (
     <nav className="flex w-15 flex-col items-center gap-1.5 rounded-3xl border border-line bg-card py-2.5 backdrop-blur-xl">
       <div className="mb-2 flex h-10 w-10 items-center justify-center rounded-xl bg-accent text-accent-ink">
@@ -23,6 +24,11 @@ function Rail({ screen, onChange }) {
           </button>
         )
       })}
+
+      <div className="flex-1" />
+      <button onClick={onSettings} aria-label="Settings" className="press flex h-11 w-11 items-center justify-center rounded-xl text-low">
+        <Settings2 className="h-5 w-5" strokeWidth={1.75} />
+      </button>
     </nav>
   )
 }
