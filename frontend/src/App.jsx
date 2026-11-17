@@ -9,6 +9,8 @@ import { useIdle } from './useIdle'
 import AlwaysOn from './components/AlwaysOn'
 import AssistantScreen from './components/AssistantScreen'
 import SystemScreen from './components/SystemScreen'
+import ThemeScreen from './components/ThemeScreen'
+import { useTheme } from './useTheme'
 import ConnectScreen from './components/ConnectScreen'
 import Backdrop from './components/Backdrop'
 import Rail from './components/Rail'
@@ -55,6 +57,7 @@ function App() {
     const title = SCREENS.find((s) => s.id === screen).label
     const lastReply = messages.findLast((m) => m.from === 'kageon')?.text
     const idle = useIdle(AOD_AFTER_MS)
+    const { theme, changeTheme, resetTheme } = useTheme()
 
     useEffect(() => {
       if (screen === 'assistant' && reply) clearReply()
@@ -163,11 +166,7 @@ function App() {
           <SystemScreen t={telemetry} history={history} mode={mode} onMode={changeMode} host={host} />
         )}
 
-        {screen === 'theme' && (
-          <div className="flex flex-1 items-center justify-center text-low">
-            The {title} screen comes in a later lesson
-          </div>
-        )}
+        {screen === 'theme' && <ThemeScreen theme={theme} onChange={changeTheme} onReset={resetTheme} />}
       </div>
       {idle && <AlwaysOn telemetry={telemetry} mode={mode} />}
             {editing !== null && (

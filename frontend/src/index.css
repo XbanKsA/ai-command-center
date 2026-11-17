@@ -135,3 +135,47 @@ button {
     filter: blur(0.5rem);
   }
 }
+/* THEME: while colours change, everything fades to them. --theme-speed is 1.2s for a tap, 0.15s while dragging */
+.theme-fade,
+.theme-fade *:not(.press, .own-motion) {
+  transition:
+    background-color var(--theme-speed) ease,
+    color var(--theme-speed) ease,
+    border-color var(--theme-speed) ease !important;
+}
+/* reduced motion: animations finish at once, nothing loops */
+.calm *,
+.calm *::after {
+  animation-duration: 0.01s !important;
+  animation-delay: 0s !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 0.01s !important;
+}
+
+@layer components {
+  /* the colour wheel: a ring cut out of a full circle */
+  .hue-ring {
+    border-radius: 9999px;
+    touch-action: none; /* dragging on the ring must not scroll the page */
+    mask: radial-gradient(circle, transparent 60%, black 60.5%);
+  }
+
+  /* the background slider: white to black, with a big thumb that's easy to grab */
+  .shade-slider {
+    appearance: none;
+    height: 3.25rem;
+    border-radius: 0.875rem;
+    border: 1px solid var(--line);
+    background: linear-gradient(90deg in oklch, oklch(0.985 0 0), oklch(0 0 0));
+    touch-action: none;
+  }
+  .shade-slider::-webkit-slider-thumb {
+    appearance: none;
+    width: 1.6rem;
+    height: 2.75rem;
+    border-radius: 0.6rem;
+    background: white;
+    border: 3px solid oklch(0 0 0 / 0.6);
+    box-shadow: 0 2px 8px oklch(0 0 0 / 0.4);
+  }
+}
