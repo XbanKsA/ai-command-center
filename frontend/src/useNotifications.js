@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 
 const STORAGE = 'kageon_notify'
+const PC_STORAGE = 'kageon_pc_notify'
 
 // Kageon's own alerts, and whether each one is on (all on to start with)
 export const KAGEON_KINDS = [
@@ -14,7 +15,18 @@ const DEFAULT_KINDS = { replies: true, ask: true, offline: true, hot: true }
 // replies and questions already pop up as the reply toast, so only these get their own pop-up
 const POP_UP = ['offline', 'hot', 'pc']
 
+const DEFAULT_PC = { enabled: false, apps: [], hideOnAod: true }
+
+function loadPc() {
+  try {
+    return { ...DEFAULT_PC, ...JSON.parse(localStorage.getItem(PC_STORAGE)) }
+  } catch {
+    return DEFAULT_PC
+  }
+}
+
 function loadKinds() {
+  
   try {
     return { ...DEFAULT_KINDS, ...JSON.parse(localStorage.getItem(STORAGE)) }
   } catch {
@@ -28,7 +40,7 @@ export function useNotifications() {
   const [popup, setPopup] = useState(null) // the one showing as a pop-up right now
   const [kinds, setKinds] = useState(loadKinds)
   const kindsRef = useRef(kinds) // notify() reads the switches from here, so notify itself never changes
-
+  const [pc, setPc] = useState(loadPc)
   useEffect(() => {
     kindsRef.current = kinds
     localStorage.setItem(STORAGE, JSON.stringify(kinds))
@@ -46,6 +58,22 @@ export function useNotifications() {
     setKinds((prev) => ({ ...prev, [id]: !prev[id] }))
   }
 
+  useEffect(() => {
+    localStorage.setItem(PC_STORAGE, JSON.stringify(pc))
+  }, [pc])
+
+  function changePc(patch) {
+    setPc((prev) => ({ ...prev, ...patch }))
+  }
+
+  // pick or unpick one app
+  function togglePcApp(app) {
+    setPc((prev) => ({
+      ...prev,
+      apps: prev.apps.includes(app) ? prev.apps.filter((a) => a !== app) : [...prev.apps, app],
+    }))
+  }
+
   // useCallback keeps these the same function every time. The pop-up's 5-second timer restarts
   // whenever closePopup changes, so a new function on every screen update would keep it open forever.
   const closePopup = useCallback(() => setPopup(null), [])
@@ -55,5 +83,5 @@ export function useNotifications() {
     setUnread(0)
   }, [])
 
-  return { list, unread, popup, kinds, notify, toggleKind, markRead, clear, closePopup }
+  return { list, unread, popup, kinds, notify, toggleKind, markRead, clear, closePopup, pc, changePc, togglePcApp }
 }

@@ -18,6 +18,7 @@ export function useKageon(host, notify) {
   const [apps, setApps] = useState([])
   const [mode, setModeInfo] = useState(null)
   const [media, setMedia] = useState(null)
+  const [pcNotify, setPcNotify] = useState({ status: 'starting', apps: [] }) // can the PC read its notifications, and from which apps
   const socketRef = useRef(null)
   const hotRef = useRef(false) // already warned about the GPU? (so it warns once, not every second)
   const connectedRef = useRef(false)
@@ -75,6 +76,10 @@ export function useKageon(host, notify) {
           setApps(msg.apps)
         } else if (msg.type === 'mode') {
           setModeInfo(msg)
+        } else if (msg.type === 'notify_status') {
+          setPcNotify({ status: msg.status, apps: msg.apps })
+        } else if (msg.type === 'pc_notification') {
+          notify('pc', msg.app, [msg.title, msg.text].filter(Boolean).join(' · '))
         } else if (msg.type === 'pong') {
           pongWaiter.current?.()
         } else if (msg.type === 'media') {
@@ -171,6 +176,12 @@ export function useKageon(host, notify) {
     })
   }, [])
 
+  const sendNotifySettings = useCallback((pc) => {
+    const ws = socketRef.current
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: 'notify_settings', enabled: pc.enabled, apps: pc.apps }))
+    }
+  }, [])
 
 
   const clearReply = useCallback(() => setReply(null), [])
@@ -179,5 +190,5 @@ export function useKageon(host, notify) {
   if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'list_apps', query }))
 }, [])
 
-      return { status, telemetry, error, sendPin, launch, ask, confirm, reply, clearReply, apps, searchApps, mode, changeMode, messages, sendVoice, media, mediaKey, history, coreVersion, testConnection }
+      return { status, telemetry, error, sendPin, launch, ask, confirm, reply, clearReply, apps, searchApps, mode, changeMode, messages, sendVoice, media, mediaKey, history, coreVersion, testConnection, pcNotify, sendNotifySettings }
 }

@@ -42,7 +42,7 @@ function App() {
     setHost(null)
   }
     const notes = useNotifications()
-    const { status, telemetry, error, sendPin, launch, ask, confirm, reply, clearReply, apps, searchApps, mode, changeMode, messages, sendVoice, media, mediaKey, history, coreVersion, testConnection } = useKageon(host, notes.notify)
+    const { status, telemetry, error, sendPin, launch, ask, confirm, reply, clearReply, apps, searchApps, mode, changeMode, messages, sendVoice, media, mediaKey, history, coreVersion, testConnection,pcNotify, sendNotifySettings } = useKageon(host, notes.notify)
     function runKey(k) {
       if (k.action.type === 'launch') launch(k.action.target)
       else ask(k.action.text)
@@ -75,6 +75,9 @@ function App() {
     useEffect(() => {
       if (screen === 'assistant' && reply) clearReply()
     }, [screen, reply, clearReply])
+    useEffect(() => {
+      if (status === 'connected') sendNotifySettings(notes.pc)
+    }, [status, notes.pc, sendNotifySettings])
     if (!host) return <ConnectScreen onFound={saveHost} />
 
   if (status === 'need_pin') return <PinScreen onSubmit={sendPin} error={error} />
@@ -190,6 +193,10 @@ function App() {
           onClose={() => setSettingsOpen(false)}
           kinds={notes.kinds}
           onToggleKind={notes.toggleKind}
+          pc={notes.pc}
+          pcStatus={pcNotify}
+          onPcChange={notes.changePc}
+          onPcApp={notes.togglePcApp}
         />
       )}
       <NotificationToast n={notes.popup} onClose={notes.closePopup} onOpen={openBell} />

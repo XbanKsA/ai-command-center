@@ -11,7 +11,51 @@ const TABS = [
 
 const wait = (ms) => new Promise((r) => setTimeout(r, ms))
 
-function SettingsPopup({ host, coreVersion, onTest, onForget, onClose, kinds, onToggleKind }) {
+const PC_PROBLEM = {
+  starting: 'Checking with the PC…',
+  denied: 'Windows said no. On the PC, allow apps to access your notifications, then turn this off and on.',
+  unavailable: "This PC can't share its notifications. Run setup.bat again on the PC.",
+}
+
+function PcApps({ pc, pcStatus, onPcChange, onPcApp }) {
+  if (pcStatus.status !== 'ok') {
+    return <p className="border-t border-line py-3 text-sm text-amber-300">{PC_PROBLEM[pcStatus.status] ?? PC_PROBLEM.starting}</p>
+  }
+  // apps the PC has seen, plus any you picked that haven't shown up since Kageon started
+  const apps = [...new Set([...pcStatus.apps, ...pc.apps])]
+
+  return (
+    <div className="reveal border-t border-line py-3">
+      <p className="mb-2.5 text-sm text-low">
+        {apps.length ? 'Pick the apps to show:' : 'No apps yet. Apps appear here once they show a notification on the PC.'}
+      </p>
+      <div className="flex flex-wrap gap-2">
+        {apps.map((app) => {
+          const on = pc.apps.includes(app)
+          return (
+            <button
+              key={app}
+              aria-pressed={on}
+              onClick={() => onPcApp(app)}
+              className={`press h-11 rounded-full border px-4 text-sm font-medium transition-colors duration-300 ${on ? 'border-accent-line bg-accent-soft text-accent-text' : 'border-line text-low'}`}
+            >
+              {app}
+            </button>
+          )
+        })}
+      </div>
+      <div className="mt-3 flex min-h-13 items-center justify-between gap-4 border-t border-line py-1">
+        <div>
+          <p className="font-medium">Hide message text on the always-on display</p>
+          <p className="text-sm text-low">Shows only the app name and how many.</p>
+        </div>
+        <Toggle on={pc.hideOnAod} onChange={(on) => onPcChange({ hideOnAod: on })} label="Hide message text on the always-on display" />
+      </div>
+    </div>
+  )
+}
+
+function SettingsPopup({ host, coreVersion, onTest, onForget, onClose, kinds, onToggleKind, pc, pcStatus, onPcChange, onPcApp }) {
   const [tab, setTab] = useState('connection')
   const [link, setLink] = useState('trying')
   const [ms, setMs] = useState(null)
@@ -71,11 +115,11 @@ function SettingsPopup({ host, coreVersion, onTest, onForget, onClose, kinds, on
           </p>
         </nav>
 
-        <div className="relative min-w-0 flex-1 overflow-y-auto px-6.5 py-6">
-          <button onClick={onClose} aria-label="Close settings" className="press absolute right-3.5 top-3.5 flex h-11 w-11 items-center justify-center rounded-xl text-low">
-            <X className="h-5 w-5" strokeWidth={1.75} />
-          </button>
+        <button onClick={onClose} aria-label="Close settings" className="press absolute right-3.5 top-3.5 z-5 flex h-11 w-11 items-center justify-center rounded-xl bg-card-solid text-low">
+          <X className="h-5 w-5" strokeWidth={1.75} />
+        </button>
 
+        <div className="relative min-w-0 flex-1 overflow-y-auto px-6.5 py-6">
           {tab === 'connection' && (
             <div className="reveal flex flex-col">
               <h3 className="text-lg font-semibold">Connection</h3>
@@ -113,6 +157,16 @@ function SettingsPopup({ host, coreVersion, onTest, onForget, onClose, kinds, on
                   <Toggle on={kinds[k.id]} onChange={() => onToggleKind(k.id)} label={k.label} />
                 </div>
               ))}
+
+              <p className="mb-1 mt-5 text-xs font-semibold text-low">From your PC</p>
+              <div className="flex min-h-13 items-center justify-between gap-4 border-t border-line py-1">
+                <div>
+                  <p className="font-medium">Show PC notifications</p>
+                  <p className="text-sm text-low">Off until you turn it on. Only the apps you pick leave the PC.</p>
+                </div>
+                <Toggle on={pc.enabled} onChange={(on) => onPcChange({ enabled: on })} label="Show PC notifications" />
+              </div>
+              {pc.enabled && <PcApps pc={pc} pcStatus={pcStatus} onPcChange={onPcChange} onPcApp={onPcApp} />}
             </div>
           )}
         </div>
