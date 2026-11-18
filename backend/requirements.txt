@@ -12,6 +12,10 @@ pystray>=0.19              # system-tray icon + "Kageon is running" notification
 winrt-runtime>=3.0; sys_platform == "win32"                  # what's playing (the tablet's media card)
 winrt-Windows.Foundation>=3.0; sys_platform == "win32"
 winrt-Windows.Media.Control>=3.0; sys_platform == "win32"
+winrt-Windows.UI.Notifications>=3.0; sys_platform == "win32"             # PC notifications on the tablet
+winrt-Windows.UI.Notifications.Management>=3.0; sys_platform == "win32"
+winrt-Windows.ApplicationModel>=3.0; sys_platform == "win32"
+winrt-Windows.Foundation.Collections>=3.0; sys_platform == "win32"
 
 # --- voice (wake word, speech-to-text, text-to-speech) ---
 numpy>=1.26

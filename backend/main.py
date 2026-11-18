@@ -19,6 +19,9 @@ WebSocket protocol (ws://<pc-ip>:8765/ws) -- all messages are JSON objects with 
   {"type":"get_mode"}                                {"type":"mode","label":"qwen3.5:4b, Gaming mode (auto)",...}
   {"type":"set_mode","mode":"auto|gaming|normal"}    {"type":"mode", ...}   (also pushed on every change)
   {"type":"media_key","key":"play_pause"}            {"type":"media_result","key":..,"ok":..}  (silent: no chat)
+  {"type":"notify_settings","enabled":..,"apps":[..]} {"type":"notify_status","status":..,"apps":[..]}
+                                                     {"type":"pc_notification","app":..,"title":..}  (only
+                                                      to tablets that turned it on, only apps they picked)
                                                      {"type":"media","playing":..,"title":..}  (pushed on change)
                                                      {"type":"telemetry", ...}   (pushed every 1.5 s)
                                                      {"type":"assistant_event", ...} (PC voice activity)
@@ -47,6 +50,7 @@ from hub import Client, Hub
 from assistant import Assistant
 from llm import OllamaClient
 from media_watch import MediaWatcher
+from notify_watch import NotificationWatcher, allowed_for
 from memory import MemoryStore
 from modes import ModeManager
 from telemetry import TelemetryCollector
@@ -126,6 +130,7 @@ class State:
     modes: ModeManager
     memory: MemoryStore | None = None
     media: MediaWatcher
+    notify: NotificationWatcher
     media_state: dict
     tasks: list[asyncio.Task]
 
@@ -155,6 +160,7 @@ def create_app(settings: Settings | None = None, llm: OllamaClient | None = None
                                      settings.ollama_keep_alive, settings.think_default, settings.think_timeout)
         st.hub = Hub()
         st.media = MediaWatcher()
+        st.notify = NotificationWatcher()
         st.media_state = {"available": False}
         st.voice = VoiceEngine(settings, loop, on_command=lambda text: st.assistant.handle_text(text, "voice"),
                                vram_reader=st.telemetry.vram_info)
@@ -180,6 +186,7 @@ def create_app(settings: Settings | None = None, llm: OllamaClient | None = None
         st.tasks.append(asyncio.create_task(telemetry_loop()))
         if background:
             st.tasks.append(asyncio.create_task(media_loop()))
+            st.tasks.append(asyncio.create_task(notify_loop()))
 
         if background and settings.discovery_enabled:
             st.discovery = DiscoveryService(settings.discovery_port, settings.port, settings.server_name,
@@ -246,6 +253,28 @@ def create_app(settings: Settings | None = None, llm: OllamaClient | None = None
             except Exception as exc:
                 log.debug("media loop: %s", exc)
             await asyncio.sleep(settings.media_interval)
+
+    def notify_status() -> dict:
+        return {"type": "notify_status", "status": st.notify.status, "apps": st.notify.apps}
+
+    async def check_notifications() -> None:
+        """Read new PC notifications and pass each one only to the tablets that asked for that app."""
+        apps_before = list(st.notify.apps)
+        for n in await st.notify.poll():
+            for c in list(st.hub.clients.values()):
+                if allowed_for(c.notify, n["app"]):
+                    await st.hub.send(c, {"type": "pc_notification", **n})
+        if st.notify.apps != apps_before:   # a new app showed up: let the tablets offer it
+            await st.hub.broadcast(notify_status())
+
+    async def notify_loop():
+        while True:
+            try:
+                if any(c.notify and c.notify.get("enabled") for c in st.hub.clients.values()):
+                    await check_notifications()
+            except Exception as exc:
+                log.debug("notify loop: %s", exc)
+            await asyncio.sleep(settings.notify_interval)
 
     app = FastAPI(title="Kageon Core", version=VERSION, lifespan=lifespan)
     app.state.core = st
@@ -461,6 +490,7 @@ def create_app(settings: Settings | None = None, llm: OllamaClient | None = None
         await st.hub.send(client, {"type": "telemetry", **st.telemetry.snapshot()})
         await st.hub.send(client, {"type": "mode", **st.modes.status()})
         await st.hub.send(client, {"type": "media", **st.media_state})
+        await st.hub.send(client, notify_status())
         pending_tasks: set[asyncio.Task] = set()
 
         def spawn(coro):
@@ -522,6 +552,12 @@ def create_app(settings: Settings | None = None, llm: OllamaClient | None = None
                     await st.hub.send(client, {"type": "mode", "request_id": rid, **st.modes.status()})
                 elif t == "set_mode":
                     spawn(do_set_mode(str(msg.get("mode", "")), rid))
+                elif t == "notify_settings":
+                    apps = msg.get("apps") if isinstance(msg.get("apps"), list) else []
+                    client.notify = {"enabled": bool(msg.get("enabled")), "apps": [str(a) for a in apps][:100]}
+                    if client.notify["enabled"] and st.notify.status == "starting" and background:
+                        await st.notify.poll()   # first use: Windows asks for permission now
+                    await st.hub.send(client, notify_status())
                 elif t == "media_key":
                     spawn(do_media_key(str(msg.get("key", "")), rid))
                 elif t == "list_apps":
