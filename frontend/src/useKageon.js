@@ -8,7 +8,7 @@ function howLong(ms) {
 }
 
 export function useKageon(host, notify) {
-  const [status, setStatus] = useState('idle')// connecting , need_pin , connected , offline
+  const [status, setStatus] = useState('connecting')// connecting , need_pin , connected , offline
   const [telemetry, setTelemetry] = useState(null)
   const [history, setHistory] = useState([])
   const [coreVersion, setCoreVersion] = useState('')
