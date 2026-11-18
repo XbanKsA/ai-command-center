@@ -19,6 +19,7 @@ class Client:
     device_name: str
     connected_at: float = field(default_factory=time.time)
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    notify: dict | None = None  # this tablet's PC-notification choice: {"enabled": bool, "apps": [names]}
 
 
 class Hub:

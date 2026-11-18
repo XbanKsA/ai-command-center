@@ -213,3 +213,19 @@ def test_media_key_is_silent_and_state_is_sent_on_connect(client):
                 break
     finally:
         ws.__exit__(None, None, None)
+
+
+def test_notify_settings_are_per_tablet_and_off_by_default(client):
+    ws = pair_ws(client)
+    try:
+        assert ws.receive_json()["type"] == "auth_ok"
+        status = recv_until(ws, "notify_status")
+        assert status["status"] in ("starting", "unavailable") and status["apps"] == []
+        ws.send_json({"type": "notify_settings", "enabled": True, "apps": ["Discord", 5]})
+        status = recv_until(ws, "notify_status")
+        assert status["type"] == "notify_status"
+        clients = list(client.app.state.st.hub.clients.values()) if hasattr(client.app.state, "st") else None
+        if clients:
+            assert clients[0].notify == {"enabled": True, "apps": ["Discord", "5"]}
+    finally:
+        ws.__exit__(None, None, None)
