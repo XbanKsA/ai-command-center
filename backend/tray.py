@@ -1,6 +1,6 @@
 """System-tray icon (Windows notification area) for Kageon.
 
-Shows a small crescent icon next to the clock with a right-click menu
+Shows the Kageon icon (dark crescent on blue) next to the clock with a right-click menu
 (Show PIN / Open log / Quit Kageon) and a Windows notification when Kageon is ready.
 
 When Kageon starts with Windows it runs with pythonw.exe: no console window that can be
@@ -21,23 +21,33 @@ from typing import Callable
 
 log = logging.getLogger("tray")
 
-CYAN = (34, 211, 238, 255)
+BLUE = (69, 124, 253, 255)   # Kageon blue, the app's default accent
+INK = (5, 12, 30, 255)       # the dark moon
 LOG_MAX_BYTES = 2 * 1024 * 1024
 
 
 def make_icon_image(size: int = 64):
-    """A cyan crescent moon (the "shadow" in Kageon) on a transparent background."""
+    """The Kageon icon: a dark crescent moon on a blue rounded square.
+
+    Same drawing as assets/kageon.ico, the tablet app icon and the favicon. Drawn 8x bigger
+    and scaled down, so the edges stay smooth even at 16 px.
+    """
     from PIL import Image, ImageDraw
 
-    mask = Image.new("L", (size, size), 0)
-    draw = ImageDraw.Draw(mask)
-    pad = size // 16
-    draw.ellipse((pad, pad, size - pad, size - pad), fill=255)                       # full moon
-    shift = size * 0.30
-    draw.ellipse((pad + shift, pad - shift * 0.35, size - pad + shift, size - pad - shift * 0.35), fill=0)  # bite
-    img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
-    img.paste(Image.new("RGBA", (size, size), CYAN), (0, 0), mask)
-    return img
+    big = size * 8
+    u = big / 100                                    # the design is 100 units across
+    img = Image.new("RGBA", (big, big), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(img)
+    draw.rounded_rectangle((0, 0, big - 1, big - 1), radius=22 * u, fill=BLUE)
+
+    # The moon: a circle (centre 50,50, radius 27) with a bite taken out of its top right
+    # (centre 69.7,30.3, radius 21) - the same shape as the app's Logo.
+    moon = Image.new("L", (big, big), 0)
+    m = ImageDraw.Draw(moon)
+    m.ellipse(((50 - 27) * u, (50 - 27) * u, (50 + 27) * u, (50 + 27) * u), fill=255)
+    m.ellipse(((69.68 - 21) * u, (30.32 - 21) * u, (69.68 + 21) * u, (30.32 + 21) * u), fill=0)
+    img.paste(Image.new("RGBA", (big, big), INK), (0, 0), moon)
+    return img.resize((size, size), Image.LANCZOS)
 
 
 def redirect_output_to_log(path: Path):
