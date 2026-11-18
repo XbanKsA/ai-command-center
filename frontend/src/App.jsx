@@ -11,6 +11,9 @@ import AssistantScreen from './components/AssistantScreen'
 import SystemScreen from './components/SystemScreen'
 import ThemeScreen from './components/ThemeScreen'
 import { useTheme } from './useTheme'
+import { useNotifications } from './useNotifications'
+import NotificationPanel from './components/NotificationPanel'
+import NotificationToast from './components/NotificationToast'
 import SettingsPopup from './components/SettingsPopup'
 import ConnectScreen from './components/ConnectScreen'
 import Backdrop from './components/Backdrop'
@@ -38,7 +41,8 @@ function App() {
     localStorage.removeItem('kageon_token')
     setHost(null)
   }
-        const { status, telemetry, error, sendPin, launch, ask, confirm, reply, clearReply, apps, searchApps, mode, changeMode, messages, sendVoice, media, mediaKey, history, coreVersion, testConnection } = useKageon(host)
+    const notes = useNotifications()
+    const { status, telemetry, error, sendPin, launch, ask, confirm, reply, clearReply, apps, searchApps, mode, changeMode, messages, sendVoice, media, mediaKey, history, coreVersion, testConnection } = useKageon(host, notes.notify)
     function runKey(k) {
       if (k.action.type === 'launch') launch(k.action.target)
       else ask(k.action.text)
@@ -57,6 +61,12 @@ function App() {
     const [editing, setEditing] = useState(null)
     const [screen, setScreen] = useState('deck')
     const [settingsOpen, setSettingsOpen] = useState(false)
+    const [bellOpen, setBellOpen] = useState(false)
+    function openBell() {
+      setBellOpen(true)
+      notes.markRead()
+      notes.closePopup()
+    }
     const title = SCREENS.find((s) => s.id === screen).label
     const lastReply = messages.findLast((m) => m.from === 'kageon')?.text
     const idle = useIdle(AOD_AFTER_MS)
@@ -93,7 +103,7 @@ function App() {
       <Rail screen={screen} onChange={setScreen} onSettings={() => setSettingsOpen(true)} />
 
       <div className="flex min-w-0 flex-1 flex-col gap-4">
-                <TopBar title={title} mode={mode} onMode={changeMode} onAsk={() => setScreen('assistant')} />
+                <TopBar title={title} mode={mode} onMode={changeMode} onAsk={() => setScreen('assistant')} unread={notes.unread} onBell={openBell} />
 
                 {screen === 'deck' && (
           <div className="flex min-h-0 flex-1 flex-col gap-3">
@@ -178,9 +188,13 @@ function App() {
           onTest={testConnection}
           onForget={() => { setSettingsOpen(false); forgetHost() }}
           onClose={() => setSettingsOpen(false)}
+          kinds={notes.kinds}
+          onToggleKind={notes.toggleKind}
         />
       )}
-      {idle && <AlwaysOn telemetry={telemetry} mode={mode} />}
+      <NotificationToast n={notes.popup} onClose={notes.closePopup} onOpen={openBell} />
+      {bellOpen && <NotificationPanel list={notes.list} onClear={notes.clear} onClose={() => setBellOpen(false)} />}
+      <ReplyToast reply={reply} onClose={clearReply} onConfirm={confirm} />
       {idle && <AlwaysOn telemetry={telemetry} mode={mode} />}
             {editing !== null && (
         <KeyEditor

@@ -1,7 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 
-export function useKageon(host) { 
-  const [status, setStatus] = useState('connecting') // connecting , need_pin , connected , offline
+const HOT_C = 80 // GPU temperature that counts as running hot
+
+function howLong(ms) {
+  const s = Math.round(ms / 1000)
+  return s < 60 ? `${s} s` : `${Math.round(s / 60)} min`
+}
+
+export function useKageon(host, notify) {
+  const [status, setStatus] = useState('idle')// connecting , need_pin , connected , offline
   const [telemetry, setTelemetry] = useState(null)
   const [history, setHistory] = useState([])
   const [coreVersion, setCoreVersion] = useState('')
@@ -12,6 +19,9 @@ export function useKageon(host) {
   const [mode, setModeInfo] = useState(null)
   const [media, setMedia] = useState(null)
   const socketRef = useRef(null)
+  const hotRef = useRef(false) // already warned about the GPU? (so it warns once, not every second)
+  const connectedRef = useRef(false)
+  const offlineSince = useRef(null) // when the connection dropped
   const [messages, setMessages] = useState([])
 
   const addMessage = useCallback((m) => {
@@ -39,6 +49,11 @@ export function useKageon(host) {
           if (msg.token) localStorage.setItem('kageon_token', msg.token)
           setError('')
           setStatus('connected')
+          connectedRef.current = true
+          if (offlineSince.current) {
+            notify('offline', 'The PC was offline', `for ${howLong(Date.now() - offlineSince.current)}. Connected again.`)
+            offlineSince.current = null
+          }
         } else if (msg.type === 'auth_error') {
           if (msg.reason === 'invalid_token') localStorage.removeItem('kageon_token')
           if (msg.reason === 'invalid_pin') setError('Wrong PIN, try again.')
@@ -46,9 +61,12 @@ export function useKageon(host) {
           setStatus('need_pin') 
         } else if (msg.type === 'assistant_reply') {
           setReply({ text: msg.reply, status: msg.status, pendingId: msg.pending_id })
+          if (msg.pending_id) notify('ask', 'Kageon is asking', msg.reply)
           addMessage({ from: 'kageon', text: msg.reply, pendingId: msg.pending_id })
         } else if (msg.type === 'assistant_event') {
           setReply({ text: msg.reply, status: msg.status, pendingId: msg.pending_id })
+          if (msg.pending_id) notify('ask', 'Kageon is asking', msg.reply)
+          else notify('replies', `You said: "${msg.user_text}"`, msg.reply)
           addMessage({ from: 'pc', text: msg.user_text })
           addMessage({ from: 'kageon', text: msg.reply, pendingId: msg.pending_id })
         setReply({ text: msg.reply, status: msg.status, pendingId: msg.pending_id })
@@ -66,11 +84,22 @@ export function useKageon(host) {
         } else if (msg.type === 'telemetry') {
           setTelemetry(msg)
           setHistory((prev) => [...prev, msg].slice(-40)) 
+          const temp = msg.gpu?.temperature_c
+          if (temp >= HOT_C && !hotRef.current) {
+            hotRef.current = true
+            notify('hot', 'GPU running hot', `${temp}°C`)
+          } else if (temp < HOT_C - 5) {
+            hotRef.current = false // cooled down: warn again next time
+          }
         }
       }
 
       ws.onclose = () => {
         if (closedByUs) return
+        if (connectedRef.current) {
+          connectedRef.current = false
+          offlineSince.current = Date.now() // we were connected, now we're not
+        }
         setStatus('offline')
         retryTimer = setTimeout(connect, 3000) // try again every 3 seconds
       }
@@ -83,7 +112,7 @@ export function useKageon(host) {
       clearTimeout(retryTimer)
       socketRef.current?.close()
     }
-  }, [host, addMessage])
+  }, [host, addMessage, notify])
 
   function send(data) {
     const ws = socketRef.current

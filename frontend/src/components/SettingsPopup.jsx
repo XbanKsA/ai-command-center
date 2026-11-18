@@ -1,12 +1,17 @@
 import { useCallback, useEffect, useState } from 'react'
-import { Wifi, X } from 'lucide-react'
+import { Bell, Wifi, X } from 'lucide-react'
 import ConnectionDiagram from './ConnectionDiagram'
+import Toggle from './Toggle'
+import { KAGEON_KINDS } from '../useNotifications'
 
-const TABS = [{ id: 'connection', label: 'Connection', icon: Wifi }] // Notifications joins in its own part
+const TABS = [
+  { id: 'connection', label: 'Connection', icon: Wifi },
+  { id: 'notifications', label: 'Notifications', icon: Bell },
+]
 
 const wait = (ms) => new Promise((r) => setTimeout(r, ms))
 
-function SettingsPopup({ host, coreVersion, onTest, onForget, onClose }) {
+function SettingsPopup({ host, coreVersion, onTest, onForget, onClose, kinds, onToggleKind }) {
   const [tab, setTab] = useState('connection')
   const [link, setLink] = useState('trying')
   const [ms, setMs] = useState(null)
@@ -94,6 +99,20 @@ function SettingsPopup({ host, coreVersion, onTest, onForget, onClose }) {
                   Forget this PC
                 </button>
               </div>
+            </div>
+          )}
+
+          {tab === 'notifications' && (
+            <div className="reveal flex flex-col">
+              <h3 className="text-lg font-semibold">Notifications</h3>
+              <p className="mb-2 mt-1 text-sm text-low">They show under the bell at the top, and the important ones pop up for a few seconds.</p>
+              <p className="mb-1 mt-3 text-xs font-semibold text-low">On this tablet, from Kageon</p>
+              {KAGEON_KINDS.map((k) => (
+                <div key={k.id} className="flex min-h-13 items-center justify-between gap-4 border-t border-line py-1">
+                  <span className="font-medium">{k.label}</span>
+                  <Toggle on={kinds[k.id]} onChange={() => onToggleKind(k.id)} label={k.label} />
+                </div>
+              ))}
             </div>
           )}
         </div>

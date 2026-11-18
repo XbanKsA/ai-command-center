@@ -1,7 +1,7 @@
-import { Search } from 'lucide-react'
+import { Bell, Search } from 'lucide-react'
 import Clock from './Clock'
 
-function TopBar({ title, mode, onMode, onAsk }) {
+function TopBar({ title, mode, onMode, onAsk, unread, onBell }) {
   const gaming = mode?.mode === 'gaming'
   const how = mode?.switching ? 'switching…' : `${gaming ? 'Gaming' : 'Normal'} · ${mode?.auto ? 'Auto' : 'Manual'}`
 
@@ -40,6 +40,14 @@ function TopBar({ title, mode, onMode, onAsk }) {
           </button>
         </>
       )}
+      <button onClick={onBell} aria-label={`Notifications, ${unread} new`} className="press relative flex h-11 w-11 items-center justify-center rounded-xl text-mid">
+        <Bell className="h-5 w-5" strokeWidth={1.75} />
+        {unread > 0 && (
+          <span className="absolute right-1 top-1 min-w-4.5 rounded-full bg-accent px-1 text-center text-[0.7rem] font-semibold leading-4.5 text-accent-ink">
+            {unread}
+          </span>
+        )}
+      </button>
 
       <Clock />
     </header>
