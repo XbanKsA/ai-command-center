@@ -1,15 +1,15 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 
+// idle turns true after `ms` without a touch. sleep() turns it on straight away.
 export function useIdle(ms) {
   const [idle, setIdle] = useState(false)
+  const timer = useRef(null)
 
   useEffect(() => {
-    let timer
-
     function activity() {
       setIdle(false)
-      clearTimeout(timer)
-      timer = setTimeout(() => setIdle(true), ms)
+      clearTimeout(timer.current)
+      timer.current = setTimeout(() => setIdle(true), ms)
     }
 
     const events = ['pointerdown', 'keydown', 'wheel']
@@ -17,10 +17,15 @@ export function useIdle(ms) {
     activity() // start the first countdown
 
     return () => {
-      clearTimeout(timer)
+      clearTimeout(timer.current)
       events.forEach((e) => window.removeEventListener(e, activity))
     }
   }, [ms])
 
-  return idle
+  const sleep = useCallback(() => {
+    clearTimeout(timer.current)
+    setIdle(true)
+  }, [])
+
+  return { idle, sleep }
 }

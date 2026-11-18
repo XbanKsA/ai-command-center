@@ -350,3 +350,17 @@ button {
     transform: translateX(0.3rem);
   }
 }
+/* SCENE: big changes, like the always-on display, arrive slowly (over 1 s) */
+@layer components {
+  .scene {
+    animation: scene var(--scene) cubic-bezier(0.3, 0.6, 0.2, 1) both;
+  }
+}
+
+@keyframes scene {
+  from {
+    opacity: 0;
+    filter: blur(1.25rem);
+    transform: scale(1.04);
+  }
+}

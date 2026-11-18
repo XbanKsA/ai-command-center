@@ -13,7 +13,7 @@ function shadeName(s) {
   return 'Black'
 }
 
-function ThemeScreen({ theme, onChange, onReset }) {
+function ThemeScreen({ theme, onChange, onReset, onSleep }) {
   const [replay, setReplay] = useState(0) // bump it to play the preview's reveal again
 
   return (
@@ -90,6 +90,9 @@ function ThemeScreen({ theme, onChange, onReset }) {
               <button className="press h-11 flex-1 rounded-xl border border-line bg-card text-sm font-semibold">Press · 0.16 s</button>
               <button onClick={() => setReplay(replay + 1)} className="press h-11 flex-1 rounded-xl border border-line bg-card text-sm font-semibold">
                 Reveal · 0.5 s
+              </button>
+              <button onClick={onSleep} className="press h-11 flex-1 rounded-xl border border-line bg-card text-sm font-semibold">
+                Scene · 1.4 s
               </button>
             </div>
             <div className="flex gap-1 rounded-2xl bg-well p-1">

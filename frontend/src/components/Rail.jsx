@@ -1,14 +1,11 @@
-import { Settings2 } from 'lucide-react'
+import { Clock, Settings2 } from 'lucide-react'
 import { SCREENS } from '../screens'
+import Logo from './Logo'
 
-function Rail({ screen, onChange, onSettings }) {
+function Rail({ screen, onChange, onSettings, onSleep }) {
   return (
     <nav className="flex w-15 flex-col items-center gap-1.5 rounded-3xl border border-line bg-card py-2.5 backdrop-blur-xl">
-      <div className="mb-2 flex h-10 w-10 items-center justify-center rounded-xl bg-accent text-accent-ink">
-        <svg viewBox="0 0 24 24" className="h-5.5 w-5.5" fill="currentColor">
-          <path d="M12 3a9 9 0 1 0 9 9 7 7 0 0 1-9-9z" />
-        </svg>
-      </div>
+      <Logo className="mb-2 h-10 w-10" />
 
       {SCREENS.map((s) => {
         const Icon = s.icon
@@ -28,6 +25,9 @@ function Rail({ screen, onChange, onSettings }) {
       <div className="flex-1" />
       <button onClick={onSettings} aria-label="Settings" className="press flex h-11 w-11 items-center justify-center rounded-xl text-low">
         <Settings2 className="h-5 w-5" strokeWidth={1.75} />
+      </button>
+      <button onClick={onSleep} aria-label="Always-on display" className="press flex h-11 w-11 items-center justify-center rounded-xl text-low">
+        <Clock className="h-5 w-5" strokeWidth={1.75} />
       </button>
     </nav>
   )

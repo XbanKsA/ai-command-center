@@ -1,5 +1,7 @@
 import { useEffect, useState } from 'react'
 import { discoverJarvis } from '../discovery'
+import StartScreen from './StartScreen'
+import StatusCard from './StatusCard'
 
 function ConnectScreen({ onFound }) {
   const [state, setState] = useState('searching') // searching | not_found
@@ -19,40 +21,48 @@ function ConnectScreen({ onFound }) {
     return () => { cancelled = true }
   }, [attempt, onFound])
 
-  if (state === 'searching') {
-    return (
-      <div className="flex h-screen flex-col items-center justify-center gap-4 bg-black text-white">
-        <div className="h-16 w-16 animate-spin rounded-full border-4 border-slate-800 border-t-cyan-400" />
-        <p className="text-xl">Searching for your PC on Wi-Fi…</p>
-      </div>
-    )
+  function connectManually(e) {
+    e.preventDefault()
+    if (manual) onFound(manual.includes(':') ? manual : `${manual}:8765`)
   }
 
+  const searching = state === 'searching'
+
   return (
-    <div className="flex h-screen flex-col items-center justify-center gap-8 bg-black text-white">
-      <div dir="rtl" className="rounded-3xl border border-red-900 bg-red-950/40 p-10 text-center">
-        <h1 className="text-3xl font-bold text-red-300">تعذر الاتصال بالسيرفر! ⚠️</h1>
-        <p className="mt-3 text-lg text-red-100/80">تأكد أن كلا الجهازين متصلان بنفس شبكة الـ Wi-Fi.</p>
+    <StartScreen>
+      <div>
+        <h1 className="font-display text-5xl font-medium leading-tight">Connect to your PC</h1>
+        <p className="mt-3 text-mid">The tablet looks for Kageon on your Wi-Fi. The first time, you'll type the PIN shown on the PC.</p>
       </div>
-      <button onClick={() => setAttempt(attempt + 1)} className="h-14 rounded-2xl bg-cyan-400 px-8 font-bold text-black">
-        Search again
-      </button>
-      <div className="flex gap-3">
-        <input
-          value={manual}
-          onChange={(e) => setManual(e.target.value.trim())}
-          placeholder="Or type the PC address, e.g. 192.168.1.20"
-          className="h-12 w-96 rounded-xl border border-slate-700 bg-slate-950 px-4 outline-none focus:border-cyan-400"
-        />
-        <button
-          onClick={() => onFound(manual.includes(':') ? manual : `${manual}:8765`)}
-          disabled={!manual}
-          className="h-12 rounded-xl border border-slate-600 px-5 disabled:opacity-30"
-        >
-          Connect
-        </button>
-      </div>
-    </div>
+
+      <StatusCard
+        busy={searching}
+        title={searching ? 'Looking for your PC…' : 'No PC found'}
+        text={searching ? 'This takes a few seconds.' : 'Make sure Kageon is running on the PC and both are on the same Wi-Fi.'}
+      >
+        {!searching && (
+          <button onClick={() => setAttempt(attempt + 1)} className="press h-11 shrink-0 rounded-xl border border-line bg-card px-4 text-sm font-semibold">
+            Search again
+          </button>
+        )}
+      </StatusCard>
+
+      <form onSubmit={connectManually} className="flex flex-col gap-2">
+        <label htmlFor="address" className="text-xs font-semibold text-low">Or type the PC address</label>
+        <div className="flex gap-2.5">
+          <input
+            id="address"
+            value={manual}
+            onChange={(e) => setManual(e.target.value.trim())}
+            placeholder="192.168.1.20"
+            className="h-12 min-w-0 flex-1 rounded-xl border border-line bg-well px-4 outline-none placeholder:text-low focus:border-accent-line"
+          />
+          <button type="submit" disabled={!manual} className="press h-12 rounded-xl border border-line bg-card px-5 font-semibold disabled:opacity-40">
+            Connect
+          </button>
+        </div>
+      </form>
+    </StartScreen>
   )
 }
 

@@ -17,6 +17,7 @@ import NotificationToast from './components/NotificationToast'
 import SettingsPopup from './components/SettingsPopup'
 import ConnectScreen from './components/ConnectScreen'
 import Backdrop from './components/Backdrop'
+import OfflineScreen from './components/OfflineScreen'
 import Rail from './components/Rail'
 import TopBar from './components/TopBar'
 import { SCREENS } from './screens'
@@ -25,6 +26,7 @@ import MediaCard from './components/MediaCard'
 import TalkCard from './components/TalkCard'
 import { Plus, Pencil } from 'lucide-react'
 import DeckTabs from './components/DeckTabs'
+
 
 const AOD_AFTER_MS = 60 * 1000 // 60 seconds
 
@@ -35,6 +37,11 @@ function App() {
     localStorage.setItem('kageon_host', h)
     setHost(h)
   }, [])
+
+  function searchAgain() {
+    localStorage.removeItem('kageon_host')
+    setHost(null)
+  }
 
   function forgetHost() {
     localStorage.removeItem('kageon_host')
@@ -69,7 +76,7 @@ function App() {
     }
     const title = SCREENS.find((s) => s.id === screen).label
     const lastReply = messages.findLast((m) => m.from === 'kageon')?.text
-    const idle = useIdle(AOD_AFTER_MS)
+    const { idle, sleep } = useIdle(AOD_AFTER_MS)
     const { theme, changeTheme, resetTheme } = useTheme()
 
     useEffect(() => {
@@ -83,27 +90,14 @@ function App() {
   if (status === 'need_pin') return <PinScreen onSubmit={sendPin} error={error} />
 
   if (status === 'offline' || status === 'connecting') {
-    return (
-      <div className="h-screen bg-black flex flex-col gap-6 items-center justify-center">
-        <div dir="rtl" className="rounded-3xl border border-red-900 bg-red-950/40 p-10 text-center">
-          <h1 className="text-3xl font-bold text-red-300">تعذر الاتصال بالسيرفر! ⚠️</h1>
-          <p className="mt-3 text-lg text-red-100/80">تأكد أن كلا الجهازين متصلان بنفس شبكة الـ Wi-Fi.</p>
-        </div>
-        <button
-          onClick={forgetHost}
-          className="rounded-xl border border-cyan-800 px-6 py-3 text-cyan-300"
-        >
-          Search again 🔍
-        </button>
-      </div>
-    )
+    return <OfflineScreen starting={status === 'connecting'} host={host} onSearch={searchAgain} />
   }
 
 
   return (
     <div className="relative isolate flex h-screen gap-4 overflow-hidden bg-page p-4 font-sans text-hi">
       <Backdrop />
-      <Rail screen={screen} onChange={setScreen} onSettings={() => setSettingsOpen(true)} />
+          <Rail screen={screen} onChange={setScreen} onSettings={() => setSettingsOpen(true)} onSleep={sleep} />
 
       <div className="flex min-w-0 flex-1 flex-col gap-4">
                 <TopBar title={title} mode={mode} onMode={changeMode} onAsk={() => setScreen('assistant')} unread={notes.unread} onBell={openBell} />
@@ -182,7 +176,7 @@ function App() {
           <SystemScreen t={telemetry} history={history} mode={mode} onMode={changeMode} host={host} />
         )}
 
-        {screen === 'theme' && <ThemeScreen theme={theme} onChange={changeTheme} onReset={resetTheme} />}
+        {screen === 'theme' && <ThemeScreen theme={theme} onChange={changeTheme} onReset={resetTheme} onSleep={sleep} />}
       </div>
       {settingsOpen && (
         <SettingsPopup
@@ -202,7 +196,7 @@ function App() {
       <NotificationToast n={notes.popup} onClose={notes.closePopup} onOpen={openBell} />
       {bellOpen && <NotificationPanel list={notes.list} onClear={notes.clear} onClose={() => setBellOpen(false)} />}
       <ReplyToast reply={reply} onClose={clearReply} onConfirm={confirm} />
-      {idle && <AlwaysOn telemetry={telemetry} mode={mode} />}
+      {idle && <AlwaysOn telemetry={telemetry} mode={mode} notes={notes} hidePcText={notes.pc.hideOnAod} />}
             {editing !== null && (
         <KeyEditor
           initial={slots[editing]}
