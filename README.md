@@ -1,3 +1,5 @@
+<p align="center"><img src="docs/kageon-icon.png" width="120" alt="Kageon icon: a dark crescent moon on a blue rounded square"></p>
+
 # Kageon
 
 *(formerly "AI Command Center")*

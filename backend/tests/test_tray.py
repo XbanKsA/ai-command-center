@@ -9,13 +9,18 @@ from tray import Tray, make_icon_image, port_in_use, redirect_output_to_log
 from conftest import FakeLLM
 
 
-def test_icon_is_a_cyan_crescent_with_transparency():
+def test_icon_is_a_dark_crescent_on_a_blue_tile():
     img = make_icon_image(64)
     assert img.size == (64, 64) and img.mode == "RGBA"
-    alphas = [px[3] for px in img.getdata()]
-    assert 0 in alphas and 255 in alphas                     # transparent corners + solid moon
-    assert img.getpixel((14, 40))[:3] == (34, 211, 238)     # left side of the crescent is cyan
-    assert img.getpixel((50, 20))[3] == 0                    # the "bite" on the right is see-through
+    assert img.getpixel((0, 0))[3] == 0                      # rounded corner is see-through
+    assert img.getpixel((20, 32))[:3] == (5, 12, 30)         # left side of the moon is dark
+    assert img.getpixel((40, 22))[:3] == (69, 124, 253)      # the "bite" on the top right shows the blue
+    assert img.getpixel((32, 58))[:3] == (69, 124, 253)      # blue tile under the moon
+
+
+def test_icon_stays_square_at_tray_sizes():
+    for s in (16, 24, 32):
+        assert make_icon_image(s).size == (s, s)
 
 
 def test_output_goes_to_log_file_and_rotates(tmp_path, monkeypatch):
